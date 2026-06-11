@@ -2,8 +2,12 @@ from __future__ import annotations
 
 from pathlib import Path
 
+from smearglepaper.agents import check_agents
 from smearglepaper.config import DATA_DIR
+from smearglepaper.editor import improve_article_file
 from smearglepaper.models import PaperMeta
+from smearglepaper.quality import review_article_file
+from smearglepaper.scout import run_scout_review
 from smearglepaper.storage import read_json
 from smearglepaper.workflow import SmearglePaperWorkflow
 
@@ -27,6 +31,56 @@ def collect_papers(query: str = "", topic: str = "latest_ai", days: int = 7, max
     workflow = SmearglePaperWorkflow()
     papers = workflow.collect(topic or None, query or None, days, ["arxiv"], max_results)
     return {"count": len(papers), "output": str(DATA_DIR / "papers" / "latest.json"), "papers": papers}
+
+
+@mcp.tool()
+def collect_blogs(query: str = "", topic: str = "agents", days: int = 30, max_results: int = 30) -> dict[str, object]:
+    """Collect recent blog posts from built-in RSS/Atom feeds and save them to data/blogs/latest.json."""
+    result = SmearglePaperWorkflow().collect_blogs(topic or None, query or None, days, max_results)
+    result["output"] = str(DATA_DIR / "blogs" / "latest.json")
+    return result
+
+
+@mcp.tool()
+def scout_run(query: str = "", topic: str = "agents", days: int = 30, max_results: int = 50, include_blogs: bool = True, from_existing: bool = False) -> dict[str, object]:
+    """Run Scout Agent and write JSON/HTML artifacts for human review."""
+    return run_scout_review(topic or None, query or None, days, max_results, include_blogs=include_blogs, from_existing=from_existing)
+
+
+@mcp.tool()
+def agent_run(
+    query: str = "",
+    topic: str = "agents",
+    paper_url: str = "",
+    days: int = 30,
+    top_k: int = 5,
+    max_results: int = 50,
+    collect_blogs_enabled: bool = True,
+    improve_enabled: bool = True,
+    create_draft_enabled: bool = True,
+    dry_run: bool = True,
+    resume: bool = False,
+) -> dict[str, object]:
+    """Run the one-command agentic paper-to-draft workflow. Set resume=true to skip completed steps."""
+    return SmearglePaperWorkflow().agent_run(
+        topic or None,
+        query or None,
+        paper_url or None,
+        days,
+        top_k,
+        max_results,
+        collect_blogs_enabled,
+        improve_enabled,
+        create_draft_enabled,
+        dry_run,
+        resume=resume,
+    )
+
+
+@mcp.tool()
+def agent_check(agent: str = "all") -> dict[str, object]:
+    """Check readiness for each SmearglePaper agent."""
+    return check_agents(agent)
 
 
 @mcp.tool()
@@ -55,6 +109,18 @@ def write_article(paper_id: str) -> dict[str, object]:
 
 
 @mcp.tool()
+def review_article(article_path: str) -> dict[str, object]:
+    """Review a generated article Markdown or JSON file for publication readiness."""
+    return review_article_file(Path(article_path))
+
+
+@mcp.tool()
+def improve_article(article_path: str, output_prefix: str = "") -> dict[str, object]:
+    """Improve a generated article with the configured LLM and write optimized Markdown/HTML/JSON."""
+    return improve_article_file(Path(article_path), Path(output_prefix) if output_prefix else None)
+
+
+@mcp.tool()
 def create_draft(query: str = "", topic: str = "latest_ai", paper_url: str = "", days: int = 7, top_k: int = 5, dry_run: bool = True) -> dict[str, object]:
     """Run the full collect-rank-read-write-draft workflow."""
     return SmearglePaperWorkflow().create_topic_draft(topic or None, query or None, paper_url or None, days, top_k, dry_run=dry_run)
@@ -72,14 +138,57 @@ def update_draft(article_json: str, media_id: str, index: int = 0, dry_run: bool
     return SmearglePaperWorkflow().update_existing_draft(Path(article_json), media_id=media_id, real_wechat=not dry_run, index=index)
 
 
+@mcp.tool()
+def collect_github_stars(language: str = "", since: str = "weekly", max_results: int = 20) -> dict[str, object]:
+    """Collect trending GitHub repos and save star growth data."""
+    return SmearglePaperWorkflow().collect_github_stars(language or None, since, max_results)
+
+
+@mcp.tool()
+def send_notification(title: str, content: str, msg_type: str = "interactive") -> dict[str, object]:
+    """Send a notification to Feishu webhook."""
+    return SmearglePaperWorkflow().send_notification(title, content, msg_type)
+
+
+@mcp.tool()
+def daily_digest(
+    topic: str = "agents",
+    days: int = 7,
+    top_k: int = 5,
+    language: str = "",
+    notify: bool = False,
+    resume: bool = False,
+) -> dict[str, object]:
+    """Collect papers, blogs, and GitHub stars in one run, optionally send Feishu notifications. Set resume=true to skip completed steps."""
+    return SmearglePaperWorkflow().daily_digest(topic or None, days, top_k, language or None, notify, resume=resume)
+
+
+@mcp.tool()
+def trend_analysis(
+    topic: str = "agents",
+    days: int = 14,
+    top_k: int = 10,
+    language: str = "",
+) -> dict[str, object]:
+    """Analyze trends from papers, blogs, and GitHub stars. Returns hot keywords and trending repos."""
+    return SmearglePaperWorkflow().trend_analysis(topic or None, days, top_k, language or None)
+
+
+@mcp.tool()
+def check_artifacts(paper_id: str) -> dict[str, object]:
+    """Check artifact completion status for a paper. Shows which steps are done and what's next."""
+    return SmearglePaperWorkflow().check_artifacts(paper_id)
+
+
 def _find_paper(paper_id: str) -> PaperMeta:
     for item in read_json(DATA_DIR / "papers" / "latest.json", []):
         if item.get("paper_id") == paper_id:
             return PaperMeta.from_dict(item)
-    for row in read_json(DATA_DIR / "papers" / "ranked_latest.json", []):
-        paper = row.get("paper", {})
-        if paper.get("paper_id") == paper_id:
-            return PaperMeta.from_dict(paper)
+    for path in [DATA_DIR / "ranked" / "latest.json", DATA_DIR / "papers" / "ranked_latest.json"]:
+        for row in read_json(path, []):
+            paper = row.get("paper", {})
+            if paper.get("paper_id") == paper_id:
+                return PaperMeta.from_dict(paper)
     raise ValueError(f"Paper not found in latest data: {paper_id}")
 
 

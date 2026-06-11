@@ -31,6 +31,11 @@ class ArxivTemporaryError(RuntimeError):
 
 TOPIC_QUERIES: dict[str, list[str]] = {
     "latest_ai": ["cat:cs.AI OR cat:cs.CL OR cat:cs.LG OR cat:cs.CV"],
+    "agents": [
+        'cat:cs.AI AND (all:"language agent" OR all:"llm agent" OR all:"multi-agent" OR all:agentic OR all:"tool use" OR all:"autonomous agent")',
+        'cat:cs.CL AND (all:"language agent" OR all:"llm agent" OR all:"multi-agent" OR all:agentic OR all:"tool use" OR all:"autonomous agent")',
+        'cat:cs.LG AND (all:"language agent" OR all:"llm agent" OR all:"multi-agent" OR all:agentic OR all:"tool use" OR all:"autonomous agent")',
+    ],
     "nlp": ["cat:cs.CL"],
     "nlp_semantics": [
         "cat:cs.CL AND (all:semantic OR all:semantics OR all:meaning OR all:semantic_parsing OR all:textual_entailment)",

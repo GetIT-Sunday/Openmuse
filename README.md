@@ -9,9 +9,11 @@ The name is inspired by Smeargle, the Pokemon known for sketching. This project 
 ## Features
 
 - Collect recent papers from arXiv.
+- Collect recent blog posts from AI engineering RSS/Atom feeds.
 - Rank papers by topic relevance, freshness, and AI category signals.
 - Download PDFs, parse text, and extract figure candidates with PyMuPDF.
 - Generate Chinese paper-reading articles with an OpenAI-compatible model.
+- Review generated article quality and improve drafts with an LLM editing pass.
 - Fall back to a deterministic local article template when no LLM key is configured.
 - Render WeChat-compatible HTML and generate cover images.
 - Create or update WeChat Official Account drafts when credentials are configured.
@@ -73,6 +75,11 @@ data/covers/*.png
 smearglepaper topics
 smearglepaper check-llm
 smearglepaper collect --query "multimodal large language model" --days 7
+smearglepaper scout-run --topic agents --days 30 --max-results 50
+smearglepaper collect --topic agents --days 30 --max-results 50
+smearglepaper collect-blogs --topic agents --days 30 --max-results 30
+smearglepaper agent-check
+smearglepaper agent-run --topic agents --days 30 --top-k 5
 smearglepaper collect --topic nlp_semantics --days 60
 smearglepaper collect --topic nlp_syntax --days 60
 smearglepaper collect --topic nlp_pragmatics --days 60
@@ -80,6 +87,7 @@ smearglepaper rank --top-k 5
 smearglepaper read --paper-id 2401.00001
 smearglepaper write --paper-id 2401.00001
 smearglepaper review-article data/articles/<paper>.md
+smearglepaper improve-article data/articles/<paper>.json
 smearglepaper draft --topic latest_ai --dry-run
 smearglepaper draft --topic nlp_semantics_syntax_pragmatics --days 60 --top-k 3 --dry-run
 smearglepaper wechat-publish --article-json data/articles/<paper>.json --draft-only --dry-run
@@ -105,9 +113,15 @@ Available MCP tools:
 
 - `preflight`
 - `collect_papers`
+- `collect_blogs`
+- `scout_run`
+- `agent_run`
+- `agent_check`
 - `rank_latest`
 - `read_paper`
 - `write_article`
+- `review_article`
+- `improve_article`
 - `create_draft`
 - `publish_article`
 - `update_draft`

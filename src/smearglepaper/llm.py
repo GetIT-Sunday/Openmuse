@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import json
+from typing import Any
 from urllib.error import HTTPError
 import urllib.request
 
@@ -22,6 +23,12 @@ class ArticleWriter:
         return self._write_locally(paper, context)
 
     def _call_model(self, system: str, user: str, temperature: float) -> str:
+        provider = _detect_api_provider()
+        if provider == "anthropic":
+            return self._call_anthropic(system, user, temperature)
+        return self._call_openai(system, user, temperature)
+
+    def _call_openai(self, system: str, user: str, temperature: float) -> str:
         base = chat_completions_base_url(env("OPENAI_BASE_URL"))
         payload = {
             "model": env("OPENAI_MODEL", "deepseek-chat"),
@@ -40,6 +47,32 @@ class ArticleWriter:
         with urllib.request.urlopen(req, timeout=60, context=ssl_context()) as response:
             data = json.loads(response.read().decode("utf-8"))
         return data["choices"][0]["message"]["content"]
+
+    def _call_anthropic(self, system: str, user: str, temperature: float) -> str:
+        base_url = env("ANTHROPIC_BASE_URL").rstrip("/")
+        payload = {
+            "model": env("ANTHROPIC_MODEL", "claude-sonnet-4-20250514"),
+            "max_tokens": 4096,
+            "temperature": temperature,
+            "system": system,
+            "messages": [{"role": "user", "content": user}],
+        }
+        req = urllib.request.Request(
+            f"{base_url}/v1/messages",
+            data=json.dumps(payload).encode("utf-8"),
+            headers={
+                "x-api-key": env("ANTHROPIC_API_KEY"),
+                "anthropic-version": "2023-06-01",
+                "Content-Type": "application/json",
+            },
+            method="POST",
+        )
+        with urllib.request.urlopen(req, timeout=120, context=ssl_context()) as response:
+            data = json.loads(response.read().decode("utf-8"))
+        for block in data.get("content", []):
+            if block.get("type") == "text":
+                return block["text"]
+        return ""
 
     def _write_locally(self, paper: PaperMeta, context: str) -> str:
         authors = "、".join(paper.authors[:5]) or "作者未列出"
@@ -117,16 +150,20 @@ def chat_completions_base_url(base_url: str) -> str:
 
 
 def check_llm_connection() -> dict[str, object]:
+    provider = _detect_api_provider()
+    if provider == "anthropic":
+        return _check_anthropic()
+    elif provider == "openai":
+        return _check_openai()
+    else:
+        return {"ok": False, "error": "No LLM configured. Set ANTHROPIC_API_KEY or OPENAI_API_KEY."}
+
+
+def _check_openai() -> dict[str, object]:
     base_url = env("OPENAI_BASE_URL")
     api_key = env("OPENAI_API_KEY")
     model = env("OPENAI_MODEL", "deepseek-chat")
-    if not base_url or not api_key:
-        return {"ok": False, "model": model, "error": "OPENAI_BASE_URL and OPENAI_API_KEY are required."}
-    payload = {
-        "model": model,
-        "messages": [{"role": "user", "content": "Return OK only."}],
-        "max_tokens": 16,
-    }
+    payload = {"model": model, "messages": [{"role": "user", "content": "Return OK only."}], "max_tokens": 16}
     req = urllib.request.Request(
         f"{chat_completions_base_url(base_url)}/chat/completions",
         data=json.dumps(payload).encode("utf-8"),
@@ -136,12 +173,38 @@ def check_llm_connection() -> dict[str, object]:
     try:
         with urllib.request.urlopen(req, timeout=30, context=ssl_context()) as response:
             data = json.loads(response.read().decode("utf-8"))
-        return {"ok": True, "model": model, "status": "connected", "sample": data.get("choices", [{}])[0].get("message", {}).get("content", "")[:80]}
+        return {"ok": True, "provider": "openai", "model": model, "status": "connected", "sample": data.get("choices", [{}])[0].get("message", {}).get("content", "")[:80]}
     except HTTPError as exc:
         body = exc.read().decode("utf-8", errors="replace")
-        return {"ok": False, "model": model, "status_code": exc.code, "error": body[:500]}
-    except Exception as exc:  # noqa: BLE001 - returned as diagnostic output
-        return {"ok": False, "model": model, "error": f"{type(exc).__name__}: {exc}"}
+        return {"ok": False, "provider": "openai", "model": model, "status_code": exc.code, "error": body[:500]}
+    except Exception as exc:
+        return {"ok": False, "provider": "openai", "model": model, "error": f"{type(exc).__name__}: {exc}"}
+
+
+def _check_anthropic() -> dict[str, object]:
+    base_url = env("ANTHROPIC_BASE_URL").rstrip("/")
+    api_key = env("ANTHROPIC_API_KEY")
+    model = env("ANTHROPIC_MODEL", "claude-sonnet-4-20250514")
+    payload = {"model": model, "max_tokens": 16, "messages": [{"role": "user", "content": "Say OK"}]}
+    req = urllib.request.Request(
+        f"{base_url}/v1/messages",
+        data=json.dumps(payload).encode("utf-8"),
+        headers={"x-api-key": api_key, "anthropic-version": "2023-06-01", "Content-Type": "application/json"},
+        method="POST",
+    )
+    try:
+        with urllib.request.urlopen(req, timeout=30, context=ssl_context()) as response:
+            data = json.loads(response.read().decode("utf-8"))
+        text = ""
+        for block in data.get("content", []):
+            if block.get("type") == "text":
+                text += block.get("text", "")
+        return {"ok": True, "provider": "anthropic", "model": model, "status": "connected", "sample": text[:80]}
+    except HTTPError as exc:
+        body = exc.read().decode("utf-8", errors="replace")
+        return {"ok": False, "provider": "anthropic", "model": model, "status_code": exc.code, "error": body[:500]}
+    except Exception as exc:
+        return {"ok": False, "provider": "anthropic", "model": model, "error": f"{type(exc).__name__}: {exc}"}
 
 
 def notes_prompt(paper: PaperMeta, context: str) -> str:
@@ -188,6 +251,257 @@ def article_prompt(paper: PaperMeta, notes: str, outline: str) -> str:
 文章大纲：
 {outline}
 """
+
+
+def _detect_api_provider() -> str:
+    """Detect which API provider to use based on env vars."""
+    if env("ANTHROPIC_API_KEY") and env("ANTHROPIC_BASE_URL"):
+        return "anthropic"
+    if env("OPENAI_API_KEY") and env("OPENAI_BASE_URL"):
+        return "openai"
+    return "none"
+
+
+def chat_with_tools(
+    messages: list[dict[str, object]],
+    tools: list[dict[str, object]],
+    model: str | None = None,
+    temperature: float = 0.3,
+    max_tokens: int = 4096,
+) -> dict[str, object]:
+    """Call an LLM with function calling support (auto-detects Anthropic/OpenAI).
+
+    Returns a dict with:
+      - content: str | None  (final text reply, if any)
+      - tool_calls: list[dict]  (tool calls requested by the LLM, if any)
+      - finish_reason: str
+    """
+    provider = _detect_api_provider()
+    if provider == "anthropic":
+        return _chat_anthropic(messages, tools, model, temperature, max_tokens)
+    elif provider == "openai":
+        return _chat_openai(messages, tools, model, temperature, max_tokens)
+    else:
+        raise RuntimeError("No LLM configured. Set ANTHROPIC_API_KEY + ANTHROPIC_BASE_URL or OPENAI_API_KEY + OPENAI_BASE_URL.")
+
+
+def _chat_openai(
+    messages: list[dict[str, object]],
+    tools: list[dict[str, object]],
+    model: str | None,
+    temperature: float,
+    max_tokens: int,
+) -> dict[str, object]:
+    """OpenAI-compatible API call with function calling."""
+    base_url = env("OPENAI_BASE_URL")
+    api_key = env("OPENAI_API_KEY")
+    resolved_model = model or env("OPENAI_MODEL", "deepseek-chat")
+    base = chat_completions_base_url(base_url)
+    payload: dict[str, object] = {
+        "model": resolved_model,
+        "messages": messages,
+        "tools": tools,
+        "tool_choice": "auto",
+        "temperature": temperature,
+        "max_tokens": max_tokens,
+    }
+    req = urllib.request.Request(
+        f"{base}/chat/completions",
+        data=json.dumps(payload).encode("utf-8"),
+        headers={"Authorization": f"Bearer {api_key}", "Content-Type": "application/json"},
+        method="POST",
+    )
+    with urllib.request.urlopen(req, timeout=120, context=ssl_context()) as response:
+        data = json.loads(response.read().decode("utf-8"))
+
+    choice = data["choices"][0]
+    message = choice["message"]
+    finish_reason = choice.get("finish_reason", "stop")
+
+    result: dict[str, object] = {"content": message.get("content"), "tool_calls": [], "finish_reason": finish_reason}
+    raw_tool_calls = message.get("tool_calls", [])
+    if raw_tool_calls:
+        result["tool_calls"] = [
+            {
+                "id": tc["id"],
+                "name": tc["function"]["name"],
+                "arguments": json.loads(tc["function"]["arguments"]) if isinstance(tc["function"]["arguments"], str) else tc["function"]["arguments"],
+            }
+            for tc in raw_tool_calls
+        ]
+    return result
+
+
+def _chat_anthropic(
+    messages: list[dict[str, object]],
+    tools: list[dict[str, object]],
+    model: str | None,
+    temperature: float,
+    max_tokens: int,
+) -> dict[str, object]:
+    """Anthropic API call with tool use."""
+    base_url = env("ANTHROPIC_BASE_URL").rstrip("/")
+    api_key = env("ANTHROPIC_API_KEY")
+    resolved_model = model or env("ANTHROPIC_MODEL", "claude-sonnet-4-20250514")
+
+    # Extract system message
+    system_text = ""
+    user_messages = []
+    for msg in messages:
+        if msg.get("role") == "system":
+            system_text = str(msg.get("content", ""))
+        else:
+            user_messages.append(msg)
+
+    # Convert tool results to Anthropic format
+    anthropic_messages: list[dict[str, object]] = []
+    for msg in user_messages:
+        role = msg.get("role", "user")
+        if role == "tool":
+            # Tool results are appended as user messages with tool_result blocks
+            if anthropic_messages and anthropic_messages[-1].get("role") == "user":
+                anthropic_messages[-1]["content"] = anthropic_messages[-1].get("content", [])  # type: ignore
+                if isinstance(anthropic_messages[-1]["content"], str):
+                    anthropic_messages[-1]["content"] = [{"type": "text", "text": anthropic_messages[-1]["content"]}]  # type: ignore
+                anthropic_messages[-1]["content"].append({  # type: ignore
+                    "type": "tool_result",
+                    "tool_use_id": msg.get("tool_call_id", ""),
+                    "content": str(msg.get("content", "")),
+                })
+            continue
+        content = str(msg.get("content", ""))
+        if isinstance(msg.get("content"), list):
+            content = msg["content"]  # type: ignore
+        # Handle assistant messages with tool_calls
+        if role == "assistant" and msg.get("tool_calls"):
+            content_blocks: list[dict[str, object]] = []
+            if msg.get("content"):
+                content_blocks.append({"type": "text", "text": str(msg["content"])})
+            for tc in msg["tool_calls"]:  # type: ignore
+                content_blocks.append({
+                    "type": "tool_use",
+                    "id": tc["id"],  # type: ignore
+                    "name": tc["function"]["name"],  # type: ignore
+                    "input": json.loads(tc["function"]["arguments"]) if isinstance(tc["function"]["arguments"], str) else tc["function"]["arguments"],  # type: ignore
+                })
+            anthropic_messages.append({"role": "assistant", "content": content_blocks})
+        else:
+            anthropic_messages.append({"role": role, "content": content})
+
+    # Convert tools to Anthropic format
+    anthropic_tools = []
+    for tool in tools:
+        func = tool.get("function", {})
+        anthropic_tools.append({
+            "name": func.get("name", ""),
+            "description": func.get("description", ""),
+            "input_schema": func.get("parameters", {}),
+        })
+
+    payload: dict[str, object] = {
+        "model": resolved_model,
+        "max_tokens": max_tokens,
+        "temperature": temperature,
+        "messages": anthropic_messages,
+    }
+    if system_text:
+        payload["system"] = system_text
+    if anthropic_tools:
+        payload["tools"] = anthropic_tools
+
+    req = urllib.request.Request(
+        f"{base_url}/v1/messages",
+        data=json.dumps(payload).encode("utf-8"),
+        headers={
+            "x-api-key": api_key,
+            "anthropic-version": "2023-06-01",
+            "Content-Type": "application/json",
+        },
+        method="POST",
+    )
+    with urllib.request.urlopen(req, timeout=120, context=ssl_context()) as response:
+        data = json.loads(response.read().decode("utf-8"))
+
+    content_blocks = data.get("content", [])
+    stop_reason = data.get("stop_reason", "end_turn")
+
+    # Extract text and tool_use from response
+    text_content = ""
+    tool_calls = []
+    for block in content_blocks:
+        if block.get("type") == "text":
+            text_content += block.get("text", "")
+        elif block.get("type") == "tool_use":
+            tool_calls.append({
+                "id": block["id"],
+                "name": block["name"],
+                "arguments": block["input"],
+            })
+
+    return {
+        "content": text_content or None,
+        "tool_calls": tool_calls,
+        "finish_reason": stop_reason,
+    }
+
+
+def agentic_loop(
+    user_message: str,
+    tools: list[dict[str, object]],
+    system_prompt: str,
+    execute_fn: Any,
+    history: list[dict[str, object]] | None = None,
+    max_rounds: int = 10,
+) -> tuple[list[dict[str, object]], str]:
+    """Run an agentic loop: user → LLM → tool calls → LLM → ... until final reply.
+
+    Args:
+        user_message: The user's input text.
+        tools: Tool definitions for function calling.
+        system_prompt: System prompt for the LLM.
+        execute_fn: Callable(name: str, arguments: dict) -> str that runs a tool.
+        history: Previous conversation messages (optional).
+        max_rounds: Maximum tool-call rounds to prevent infinite loops.
+
+    Returns:
+        (messages, final_reply) — full message history and the final text reply.
+    """
+    messages: list[dict[str, object]] = list(history or [])
+    if not messages or messages[0].get("role") != "system":
+        messages.insert(0, {"role": "system", "content": system_prompt})
+    messages.append({"role": "user", "content": user_message})
+
+    final_reply = ""
+
+    for _ in range(max_rounds):
+        response = chat_with_tools(messages, tools)
+        assistant_msg: dict[str, object] = {"role": "assistant", "content": response.get("content") or ""}
+
+        tool_calls = response.get("tool_calls", [])
+        if tool_calls:
+            assistant_tool_calls = []
+            for tc in tool_calls:
+                assistant_tool_calls.append({
+                    "id": tc["id"],
+                    "type": "function",
+                    "function": {"name": tc["name"], "arguments": json.dumps(tc["arguments"], ensure_ascii=False)},
+                })
+            assistant_msg["tool_calls"] = assistant_tool_calls
+            messages.append(assistant_msg)
+
+            for tc in tool_calls:
+                result_str = execute_fn(tc["name"], tc["arguments"])
+                messages.append({
+                    "role": "tool",
+                    "tool_call_id": tc["id"],
+                    "content": result_str,
+                })
+        else:
+            final_reply = response.get("content") or ""
+            messages.append({"role": "assistant", "content": final_reply})
+            break
+
+    return messages, final_reply
 
 
 def _sentence(context: str, keywords: list[str]) -> str:

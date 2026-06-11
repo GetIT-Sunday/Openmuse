@@ -18,7 +18,7 @@ def load_dotenv(path: Path | None = None) -> None:
         key, value = line.split("=", 1)
         key = key.strip()
         value = value.strip().strip('"').strip("'")
-        if key and key not in os.environ:
+        if key:
             os.environ[key] = value
 
 
@@ -33,12 +33,26 @@ def runtime_settings() -> dict[str, object]:
     return {
         "data_dir": str(DATA_DIR),
         "llm": {
-            "base_url": env("OPENAI_BASE_URL"),
-            "model": env("OPENAI_MODEL", "deepseek-chat"),
-            "api_key_configured": bool(env("OPENAI_API_KEY")),
+            "provider": "anthropic" if env("ANTHROPIC_API_KEY") else "openai" if env("OPENAI_API_KEY") else "none",
+            "anthropic": {
+                "base_url": env("ANTHROPIC_BASE_URL"),
+                "model": env("ANTHROPIC_MODEL", "claude-sonnet-4-20250514"),
+                "api_key_configured": bool(env("ANTHROPIC_API_KEY")),
+            },
+            "openai": {
+                "base_url": env("OPENAI_BASE_URL"),
+                "model": env("OPENAI_MODEL", "deepseek-chat"),
+                "api_key_configured": bool(env("OPENAI_API_KEY")),
+            },
         },
         "wechat": {
             "app_id_configured": bool(env("WECHAT_APP_ID")),
             "app_secret_configured": bool(env("WECHAT_APP_SECRET")),
+        },
+        "feishu": {
+            "webhook_configured": bool(env("FEISHU_WEBHOOK_URL")),
+        },
+        "github": {
+            "token_configured": bool(env("GITHUB_TOKEN")),
         },
     }

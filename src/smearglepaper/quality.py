@@ -8,6 +8,37 @@ from .storage import read_json
 
 REQUIRED_SECTIONS = ["一句话结论", "研究问题", "方法", "关键", "局限", "适合谁读"]
 RISKY_PHRASES = ["首次", "彻底", "颠覆", "完全解决", "革命性", "显著优于所有", "证明了"]
+REVIEW_THRESHOLD = 60
+
+
+def _check_dimensions(markdown: str, headings: list[str], figure_count: int, char_count: int) -> dict[str, dict[str, object]]:
+    """Return per-dimension check results with pass/fail and weight."""
+    has_conclusion = any("结论" in h or "一句话" in h for h in headings)
+    has_method = any("方法" in h or "怎么做的" in h or "技术" in h for h in headings)
+    has_figures = figure_count > 0
+    word_count_ok = 800 <= char_count <= 5000
+    has_risky = any(phrase in markdown for phrase in RISKY_PHRASES)
+    structure_complete = len([h for h in headings if any(k in h for k in ["引言", "方法", "实验", "结论", "局限"])]) >= 3
+    avg_sentence_len = _avg_sentence_length(markdown)
+    readability_ok = avg_sentence_len < 80
+
+    return {
+        "has_conclusion": {"pass": has_conclusion, "weight": 0.15},
+        "has_method_section": {"pass": has_method, "weight": 0.20},
+        "has_figures": {"pass": has_figures, "weight": 0.10},
+        "word_count_ok": {"pass": word_count_ok, "weight": 0.15},
+        "terminology_accurate": {"pass": not has_risky, "weight": 0.20},
+        "structure_complete": {"pass": structure_complete, "weight": 0.10},
+        "readability": {"pass": readability_ok, "weight": 0.10},
+    }
+
+
+def _avg_sentence_length(text: str) -> float:
+    sentences = re.split(r"[。！？.!?]+", text)
+    sentences = [s.strip() for s in sentences if len(s.strip()) > 5]
+    if not sentences:
+        return 0
+    return sum(len(s) for s in sentences) / len(sentences)
 
 
 def review_article_file(path: Path) -> dict[str, object]:
@@ -71,6 +102,8 @@ def review_article_file(path: Path) -> dict[str, object]:
             "发布前确认图表是否为核心图，而不是 PDF 首页预览。",
         ]
 
+    checks = _check_dimensions(markdown, headings, figure_count, char_count)
+
     return {
         "path": str(path),
         "title": title,
@@ -78,7 +111,10 @@ def review_article_file(path: Path) -> dict[str, object]:
         "heading_count": len(headings),
         "figure_count": figure_count,
         "score": score,
+        "threshold": REVIEW_THRESHOLD,
+        "pass": score >= REVIEW_THRESHOLD,
         "verdict": verdict,
+        "checks": {name: {"pass": c["pass"], "weight": c["weight"]} for name, c in checks.items()},
         "issues": issues,
         "suggestions": suggestions,
     }

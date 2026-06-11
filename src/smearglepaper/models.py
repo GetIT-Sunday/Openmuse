@@ -75,3 +75,47 @@ class Article:
             thumb_media_id=str(data["thumb_media_id"]) if data.get("thumb_media_id") else None,
             word_count=int(data.get("word_count", 0)),
         )
+
+
+@dataclass
+class BlogPost:
+    title: str
+    url: str
+    source: str
+    published_at: str
+    summary: str = ""
+
+    def to_dict(self) -> dict[str, object]:
+        return asdict(self)
+
+
+@dataclass
+class GitHubRepo:
+    owner: str
+    name: str
+    full_name: str
+    description: str
+    stars: int
+    forks: int
+    language: str
+    url: str
+    collected_at: str
+    weekly_star_growth: int | None = None
+
+    @classmethod
+    def from_dict(cls, data: dict[str, object]) -> "GitHubRepo":
+        return cls(
+            owner=str(data.get("owner", "")),
+            name=str(data.get("name", "")),
+            full_name=str(data.get("full_name", "")),
+            description=str(data.get("description", "")),
+            stars=int(data.get("stars", 0)),
+            forks=int(data.get("forks", 0)),
+            language=str(data.get("language", "") or ""),
+            url=str(data.get("url", "")),
+            collected_at=str(data.get("collected_at", "")),
+            weekly_star_growth=int(data["weekly_star_growth"]) if data.get("weekly_star_growth") is not None else None,
+        )
+
+    def to_dict(self) -> dict[str, object]:
+        return asdict(self)
