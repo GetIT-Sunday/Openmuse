@@ -292,6 +292,7 @@ class CoreTests(unittest.TestCase):
 
         self.assertEqual(created.command, "agent")
         self.assertEqual(created.paper_id, "1706.03762")
+        self.assertEqual(created.ranking_profile, "balanced")
         self.assertEqual(approved.gate, "publish")
         self.assertTrue(resumed.real_wechat)
 

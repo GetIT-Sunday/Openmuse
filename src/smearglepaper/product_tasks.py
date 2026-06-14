@@ -94,7 +94,7 @@ class ProductTask:
         self.error = error
         self.metrics["updated_at"] = _now()
 
-    def approve(self, gate: str, *, artifact: str | None = None) -> None:
+    def approve(self, gate: str, *, artifact: str | None = None, detail: dict[str, object] | None = None) -> None:
         expected = {
             "topic": "awaiting_topic_approval",
             "publish": "awaiting_publish_approval",
@@ -103,7 +103,7 @@ class ProductTask:
             raise ValueError(f"Unknown approval gate: {gate}")
         if self.status != expected[gate]:
             raise ValueError(f"Task is not waiting for {gate} approval.")
-        self.approvals.append({"gate": gate, "approved_at": _now(), "artifact": artifact})
+        self.approvals.append({"gate": gate, "approved_at": _now(), "artifact": artifact, "detail": detail or {}})
         self.metrics["updated_at"] = _now()
 
     def latest_approval(self, gate: str) -> dict[str, object] | None:

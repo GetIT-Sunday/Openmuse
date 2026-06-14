@@ -8,6 +8,7 @@ Create and manage a durable product task:
 smearglepaper agent "解读这篇论文" --paper-url https://arxiv.org/abs/1706.03762
 smearglepaper task-resume --task-id <task-id>
 smearglepaper task-show --task-id <task-id>
+smearglepaper task-approve --task-id <task-id> --gate topic --paper-id <candidate-paper-id>
 smearglepaper task-approve --task-id <task-id> --gate publish
 smearglepaper task-resume --task-id <task-id> --real-wechat
 ```

@@ -54,6 +54,9 @@ def build_parser() -> argparse.ArgumentParser:
     product_source.add_argument("--paper-id")
     product_source.add_argument("--paper-url")
     product_source.add_argument("--article-json", help="Use an existing publish-ready article")
+    product_agent.add_argument("--ranking-profile", choices=["frontier", "classic", "engineering", "balanced"], default="balanced")
+    product_agent.add_argument("--days", type=int, default=30)
+    product_agent.add_argument("--candidate-count", type=int, default=3)
 
     sub.add_parser("tasks", help="List durable product tasks")
 
@@ -63,6 +66,7 @@ def build_parser() -> argparse.ArgumentParser:
     task_approve = sub.add_parser("task-approve", help="Approve a waiting product task gate")
     task_approve.add_argument("--task-id", required=True)
     task_approve.add_argument("--gate", required=True, choices=["topic", "publish"])
+    task_approve.add_argument("--paper-id", help="Candidate paper to approve; defaults to the top-ranked candidate")
 
     task_resume = sub.add_parser("task-resume", help="Resume a durable product task")
     task_resume.add_argument("--task-id", required=True)
@@ -323,6 +327,9 @@ def main(argv: list[str] | None = None) -> None:
                     paper_id=args.paper_id,
                     paper_url=args.paper_url,
                     article_json=Path(args.article_json) if args.article_json else None,
+                    ranking_profile=args.ranking_profile,
+                    days=args.days,
+                    candidate_count=args.candidate_count,
                 )
             )
         elif command == "tasks":
@@ -336,7 +343,7 @@ def main(argv: list[str] | None = None) -> None:
         elif command == "task-approve":
             from .product_agent import ProductAgent
 
-            _print(ProductAgent().approve(args.task_id, args.gate))
+            _print(ProductAgent().approve(args.task_id, args.gate, paper_id=args.paper_id))
         elif command == "task-resume":
             from .product_agent import ProductAgent
 
