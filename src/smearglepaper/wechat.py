@@ -2,6 +2,7 @@ from __future__ import annotations
 
 import json
 import mimetypes
+import re
 import urllib.parse
 import urllib.request
 import uuid
@@ -79,6 +80,28 @@ class WechatClient:
             thumb_media_id=thumb_media_id,
             word_count=article.word_count,
         )
+
+    def upload_markdown_images(
+        self,
+        markdown: str,
+        token: str | None = None,
+    ) -> tuple[str, dict[str, str]]:
+        """Upload local Markdown images and replace their targets with WeChat URLs."""
+        if self.dry_run:
+            return markdown, {}
+        token = token or self._access_token()
+        replacements: dict[str, str] = {}
+        for target in re.findall(r"!\[[^\]]*\]\(([^)]+)\)", markdown):
+            raw_target = target.strip()
+            path = Path(raw_target)
+            if not _is_local_image_target(raw_target) or not path.exists():
+                continue
+            if raw_target not in replacements:
+                replacements[raw_target] = self.upload_content_image(path, token)
+        prepared = markdown
+        for local_path, image_url in replacements.items():
+            prepared = prepared.replace(f"]({local_path})", f"]({image_url})")
+        return prepared, replacements
 
     def upload_thumb(self, path: Path, token: str | None = None) -> str:
         token = token or self._access_token()
@@ -160,3 +183,7 @@ class WechatClient:
         )
         with urllib.request.urlopen(req, timeout=60, context=ssl_context()) as response:
             return json.loads(response.read().decode("utf-8"))
+
+
+def _is_local_image_target(target: str) -> bool:
+    return bool(re.match(r"^(?:[A-Za-z]:[\\/]|/[^/]|file://)", target, flags=re.IGNORECASE))

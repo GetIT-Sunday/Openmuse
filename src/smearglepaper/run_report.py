@@ -55,6 +55,7 @@ class RunReport:
     steps: list[StepRecord] = field(default_factory=list)
     selected_paper: dict[str, object] | None = None
     article_quality: dict[str, object] | None = None
+    final_article_json: str | None = None
     wechat: dict[str, object] | None = None
     next_action: str = ""
 
@@ -107,6 +108,20 @@ class RunReport:
             end = dt.datetime.fromisoformat(self.ended_at)
             self.duration_seconds = (end - start).total_seconds()
 
+    def fail_active_step(self, exc: Exception, retryable: bool = True) -> None:
+        for step in reversed(self.steps):
+            if step.status == "pending" and step.ended_at is None:
+                self.complete_step(
+                    step,
+                    "failed",
+                    error={
+                        "type": type(exc).__name__,
+                        "message": str(exc),
+                        "retryable": retryable,
+                    },
+                )
+                break
+
     def save(self) -> Path:
         ensure_parent(self.run_dir / "run_report.json")
         # Save JSON
@@ -130,6 +145,7 @@ class RunReport:
             "steps": [s.to_dict() for s in self.steps],
             "selected_paper": self.selected_paper,
             "article_quality": self.article_quality,
+            "final_article_json": self.final_article_json,
             "wechat": self.wechat,
             "next_action": self.next_action,
         }
@@ -172,6 +188,11 @@ class RunReport:
             lines.append(f"- **Final Score:** {self.article_quality.get('final_score', '-')}")
             lines.append(f"- **Threshold:** {self.article_quality.get('threshold', '-')}")
             lines.append(f"- **Pass:** {self.article_quality.get('pass', '-')}")
+            lines.append("")
+
+        if self.final_article_json:
+            lines.append("## Final Article\n")
+            lines.append(f"- **JSON:** {self.final_article_json}")
             lines.append("")
 
         if self.wechat:

@@ -6,7 +6,6 @@ from smearglepaper.agents import check_agents
 from smearglepaper.config import DATA_DIR
 from smearglepaper.editor import improve_article_file
 from smearglepaper.models import PaperMeta
-from smearglepaper.quality import review_article_file
 from smearglepaper.scout import run_scout_review
 from smearglepaper.storage import read_json
 from smearglepaper.workflow import SmearglePaperWorkflow
@@ -109,9 +108,43 @@ def write_article(paper_id: str) -> dict[str, object]:
 
 
 @mcp.tool()
+def run_writing_agent(
+    paper_id: str = "",
+    paper_url: str = "",
+    paper_title: str = "",
+    notes_path: str = "",
+    article_path: str = "",
+    target_audience: str = "AI方向研究生和算法岗候选人",
+    style_mode: str = "balanced",
+    target_score: int = 85,
+    max_revisions: int = 3,
+    upload_images: bool = False,
+) -> dict[str, object]:
+    """Run the evidence-first Paper Writing Agent with persisted planning, review, and revision stages."""
+    return SmearglePaperWorkflow().run_writing_agent(
+        paper_id or None,
+        paper_url=paper_url or None,
+        paper_title=paper_title or None,
+        notes_path=Path(notes_path) if notes_path else None,
+        article_path=Path(article_path) if article_path else None,
+        target_audience=target_audience,
+        style_mode=style_mode,
+        target_score=target_score,
+        max_revisions=max_revisions,
+        upload_images=upload_images,
+    )
+
+
+@mcp.tool()
+def prepare_agent_assets(article_json: str, target_score: int = 85) -> dict[str, object]:
+    """Upload local images for an existing content-ready Agent article and write publish-ready outputs."""
+    return SmearglePaperWorkflow().prepare_agent_assets(Path(article_json), target_score=target_score)
+
+
+@mcp.tool()
 def review_article(article_path: str) -> dict[str, object]:
     """Review a generated article Markdown or JSON file for publication readiness."""
-    return review_article_file(Path(article_path))
+    return SmearglePaperWorkflow().review_article(Path(article_path))
 
 
 @mcp.tool()

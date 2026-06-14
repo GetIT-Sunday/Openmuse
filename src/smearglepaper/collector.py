@@ -55,6 +55,16 @@ TOPIC_QUERIES: dict[str, list[str]] = {
 
 
 class ArxivCollector:
+    def fetch_by_id(self, paper_id: str) -> PaperMeta | None:
+        params = urllib.parse.urlencode({"id_list": paper_id, "max_results": 1})
+        request = urllib.request.Request(f"{ARXIV_API}?{params}", headers={"User-Agent": "SmearglePaper/0.1"})
+        try:
+            with urllib.request.urlopen(request, timeout=30, context=ssl_context()) as response:
+                papers = parse_arxiv_feed(response.read())
+        except (HTTPError, TimeoutError, URLError):
+            return None
+        return papers[0] if papers else None
+
     def collect(self, topic: str | None, query: str | None, days: int, max_results: int) -> list[PaperMeta]:
         searches = [query] if query else topic_queries(topic)
         papers_by_id: dict[str, PaperMeta] = {}

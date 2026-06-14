@@ -5,7 +5,7 @@ from pathlib import Path
 from .config import DATA_DIR, env, runtime_settings
 from .storage import read_json
 
-AGENTS = ["scout", "ranker", "reader", "writer", "editor", "publisher", "github_tracker", "notifier", "orchestrator"]
+AGENTS = ["scout", "ranker", "reader", "writer", "writing_agent", "editor", "publisher", "github_tracker", "notifier", "orchestrator"]
 
 
 def check_agents(agent: str = "all") -> dict[str, object]:
@@ -90,23 +90,54 @@ def _check_writer() -> dict[str, object]:
     articles = _glob(DATA_DIR / "articles", "*.json")
     settings = runtime_settings()
     llm = settings["llm"]
+    provider = str(llm["provider"])
+    provider_settings = llm.get(provider, {}) if provider != "none" else {}
+    llm_ready = bool(provider_settings.get("api_key_configured") and provider_settings.get("base_url"))
     return _status(
-        bool(articles) and bool(llm["api_key_configured"]) and bool(llm["base_url"]),
+        bool(articles) and llm_ready,
         "Writer Agent",
         {
             "role": "turn paper notes into Chinese Markdown/HTML articles",
             "article_count": len(articles),
-            "llm_model": llm["model"],
-            "llm_base_url_configured": bool(llm["base_url"]),
-            "llm_api_key_configured": bool(llm["api_key_configured"]),
+            "llm_provider": provider,
+            "llm_model": provider_settings.get("model", ""),
+            "llm_base_url_configured": bool(provider_settings.get("base_url")),
+            "llm_api_key_configured": bool(provider_settings.get("api_key_configured")),
             "next": "Run check-llm if LLM fields are configured but writing fails.",
         },
+    )
+
+
+def _check_writing_agent() -> dict[str, object]:
+    runs = _glob(DATA_DIR / "agent_runs" / "writing", "*/manifest.json")
+    final_articles = _glob(DATA_DIR / "articles", "*.agent.json")
+    settings = runtime_settings()
+    llm = settings["llm"]
+    provider = str(llm["provider"])
+    provider_settings = llm.get(provider, {}) if provider != "none" else {}
+    llm_ready = bool(provider_settings.get("api_key_configured") and provider_settings.get("base_url"))
+    return _status(
+        llm_ready,
+        "Paper Writing Agent",
+        {
+            "role": "plan, draft, evidence-review, revise, and finalize paper explanations",
+            "run_count": len(runs),
+            "final_article_count": len(final_articles),
+            "llm_provider": provider,
+            "llm_ready": llm_ready,
+            "next": "Run writing-agent --paper-id <paper-id> after ingest-paper.",
+        },
+        [] if runs else ["No Paper Writing Agent run has been completed yet."],
     )
 
 
 def _check_editor() -> dict[str, object]:
     articles = _glob(DATA_DIR / "articles", "*.json")
     optimized = _glob(DATA_DIR / "articles", "*.optimized.json")
+    settings = runtime_settings()
+    llm = settings["llm"]
+    provider = str(llm["provider"])
+    provider_settings = llm.get(provider, {}) if provider != "none" else {}
     warnings = []
     if not optimized:
         warnings.append("No optimized article has been generated yet.")
@@ -117,7 +148,7 @@ def _check_editor() -> dict[str, object]:
             "role": "review article quality and improve drafts",
             "article_count": len(articles),
             "optimized_count": len(optimized),
-            "llm_ready": bool(env("OPENAI_BASE_URL") and env("OPENAI_API_KEY")),
+            "llm_ready": bool(provider_settings.get("api_key_configured") and provider_settings.get("base_url")),
             "next": "Run review-article, then improve-article for drafts that need revision.",
         },
         warnings,
@@ -219,6 +250,7 @@ CHECKS = {
     "ranker": _check_ranker,
     "reader": _check_reader,
     "writer": _check_writer,
+    "writing_agent": _check_writing_agent,
     "editor": _check_editor,
     "publisher": _check_publisher,
     "github_tracker": _check_github_tracker,

@@ -1,0 +1,4 @@
+interface:
+  display_name: "论文公众号写作"
+  short_description: "Evidence-grounded Chinese paper deep-read writing"
+  default_prompt: "Use $write-paper-wechat to turn this paper into a clear, evidence-grounded WeChat article."

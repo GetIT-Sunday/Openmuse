@@ -1,25 +1,30 @@
 from __future__ import annotations
 
 import json
+import sys
 from typing import Any
 from urllib.error import HTTPError
 import urllib.request
 
 from .config import env
 from .collector import ssl_context
+from .evidence import format_evidence_context
 from .models import PaperMeta
 
 
 class ArticleWriter:
     def write(self, paper: PaperMeta, parsed: dict[str, object] | None = None) -> str:
         context = build_context(paper, parsed)
-        if env("OPENAI_API_KEY") and env("OPENAI_BASE_URL"):
+        if _detect_api_provider() != "none":
             try:
                 notes = self._call_model("你是严谨的论文阅读助手，只输出结构化中文要点。", notes_prompt(paper, context), temperature=0.2)
                 outline = self._call_model("你是科技文章编辑，只输出清晰的文章大纲。", outline_prompt(paper, notes), temperature=0.3)
                 return self._call_model("你是严谨的中文科技作者，输出适合微信公众号的 Markdown 深度解读。", article_prompt(paper, notes, outline), temperature=0.45)
-            except Exception:
-                pass
+            except Exception as exc:  # noqa: BLE001 - local fallback remains available
+                print(
+                    f"Warning: LLM article generation failed; using local template: {type(exc).__name__}: {exc}",
+                    file=sys.stderr,
+                )
         return self._write_locally(paper, context)
 
     def _call_model(self, system: str, user: str, temperature: float) -> str:
@@ -30,6 +35,7 @@ class ArticleWriter:
 
     def _call_openai(self, system: str, user: str, temperature: float) -> str:
         base = chat_completions_base_url(env("OPENAI_BASE_URL"))
+        max_tokens = int(env("LLM_MAX_TOKENS", "8192"))
         payload = {
             "model": env("OPENAI_MODEL", "deepseek-chat"),
             "messages": [
@@ -37,6 +43,7 @@ class ArticleWriter:
                 {"role": "user", "content": user},
             ],
             "temperature": temperature,
+            "max_tokens": max_tokens,
         }
         req = urllib.request.Request(
             f"{base}/chat/completions",
@@ -52,7 +59,7 @@ class ArticleWriter:
         base_url = env("ANTHROPIC_BASE_URL").rstrip("/")
         payload = {
             "model": env("ANTHROPIC_MODEL", "claude-sonnet-4-20250514"),
-            "max_tokens": 4096,
+            "max_tokens": int(env("LLM_MAX_TOKENS", "8192")),
             "temperature": temperature,
             "system": system,
             "messages": [{"role": "user", "content": user}],
@@ -67,7 +74,7 @@ class ArticleWriter:
             },
             method="POST",
         )
-        with urllib.request.urlopen(req, timeout=120, context=ssl_context()) as response:
+        with urllib.request.urlopen(req, timeout=240, context=ssl_context()) as response:
             data = json.loads(response.read().decode("utf-8"))
         for block in data.get("content", []):
             if block.get("type") == "text":
@@ -126,7 +133,7 @@ class ArticleWriter:
 - 如果数据集、提示词或评测脚本没有公开，复现可信度会下降。
 - 对公众号读者来说，最需要警惕的是把单一 benchmark 的提升误读成通用能力跃迁。
 
-## 读者可以继续追问
+## 适合谁读与继续追问
 
 - 实验设置是否覆盖真实使用场景？
 - 数据集或评测指标是否存在偏差？
@@ -138,8 +145,24 @@ class ArticleWriter:
 def build_context(paper: PaperMeta, parsed: dict[str, object] | None = None) -> str:
     chunks = [paper.abstract]
     if parsed:
-        chunks.append(str(parsed.get("text", ""))[:12000])
+        chunks.append(format_evidence_context(parsed))
+        chunks.append(format_visual_evidence(parsed))
+        chunks.append(str(parsed.get("text", ""))[:16000])
     return "\n\n".join(chunk for chunk in chunks if chunk).strip()
+
+
+def format_visual_evidence(parsed: dict[str, object]) -> str:
+    visuals = parsed.get("visuals", [])
+    if not isinstance(visuals, list) or not visuals:
+        return ""
+    lines = ["PDF 图表证据索引（写作时应按标题和页码解释，不要只把图片当装饰）："]
+    for item in visuals:
+        if not isinstance(item, dict):
+            continue
+        kind = "表格" if item.get("kind") == "table" else "图"
+        caption = str(item.get("caption", "")).strip() or "未识别到标题"
+        lines.append(f"- {item.get('id', kind)}｜第 {item.get('page', '?')} 页｜{caption}")
+    return "\n".join(lines)
 
 
 def chat_completions_base_url(base_url: str) -> str:

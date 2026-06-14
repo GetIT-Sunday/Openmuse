@@ -31,7 +31,7 @@ class ToolDefinitionTests(unittest.TestCase):
     def test_tools_include_core_capabilities(self) -> None:
         names = {t["function"]["name"] for t in TOOLS}
         expected = {"collect_papers", "rank_papers", "collect_blogs", "collect_github",
-                    "ingest_paper", "generate_article", "review_article",
+                    "ingest_paper", "generate_article", "run_writing_agent", "review_article",
                     "create_wechat_draft", "daily_digest", "trend_analysis",
                     "check_status", "agent_run"}
         self.assertTrue(expected.issubset(names), f"Missing tools: {expected - names}")
@@ -58,6 +58,19 @@ class ExecuteToolTests(unittest.TestCase):
             mock_check.return_value = {"ok": True, "agents": {}}
             result = json.loads(execute_tool("check_status", {}))
             self.assertTrue(result["ok"])
+
+    @patch("smearglepaper.tools._get_workflow")
+    def test_run_writing_agent_calls_workflow(self, mock_wf) -> None:
+        mock_workflow = mock_wf.return_value
+        mock_workflow.run_writing_agent.return_value = {
+            "status": "success",
+            "run_dir": "data/agent_runs/writing/test",
+            "manifest": "data/agent_runs/writing/test/manifest.json",
+            "final": {"score": 90},
+        }
+        result = json.loads(execute_tool("run_writing_agent", {"paper_id": "2401.00001"}))
+        self.assertEqual(result["status"], "success")
+        mock_workflow.run_writing_agent.assert_called_once()
 
 
 class AgenticLoopTests(unittest.TestCase):

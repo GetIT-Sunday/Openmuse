@@ -130,6 +130,15 @@ class RunReportTests(unittest.TestCase):
         self.assertEqual(data["steps"][0]["error"]["type"], "RuntimeError")
         self.assertTrue(data["steps"][0]["error"]["retryable"])
 
+    def test_fail_active_step_marks_pending_step_failed(self) -> None:
+        report = RunReport(run_id="run_test_active_failure", workflow="test")
+        step = report.start_step("ingest-paper")
+        report.fail_active_step(RuntimeError("download failed"))
+
+        self.assertEqual(step.status, "failed")
+        self.assertEqual(step.error["type"], "RuntimeError")
+        self.assertEqual(step.error["message"], "download failed")
+
     def test_wechat_recorded(self) -> None:
         report = RunReport(run_id="run_test_009", workflow="agent-run", dry_run=True)
         report.wechat = {"draft_created": True, "draft_id": "MEDIA_123", "published": False, "dry_run": True}
@@ -139,6 +148,15 @@ class RunReportTests(unittest.TestCase):
         self.assertTrue(data["wechat"]["draft_created"])
         self.assertEqual(data["wechat"]["draft_id"], "MEDIA_123")
         self.assertFalse(data["wechat"]["published"])
+
+    def test_final_article_recorded(self) -> None:
+        report = RunReport(run_id="run_test_final", workflow="agent-run")
+        report.final_article_json = "data/articles/test.optimized.json"
+        report.finish("success")
+
+        data = report.to_dict()
+        self.assertEqual(data["final_article_json"], "data/articles/test.optimized.json")
+        self.assertIn("data/articles/test.optimized.json", report.to_markdown())
 
     def test_markdown_includes_failed_steps(self) -> None:
         report = RunReport(run_id="run_test_010", workflow="test")
@@ -179,6 +197,15 @@ class CLIAliasTests(unittest.TestCase):
         """agent-run should accept --resume flag."""
         args = build_parser().parse_args(["agent-run", "--resume"])
         self.assertTrue(args.resume)
+
+    def test_agent_run_dry_run_flag(self) -> None:
+        """agent-run should accept the documented --dry-run flag."""
+        args = build_parser().parse_args(["agent-run", "--dry-run"])
+        self.assertFalse(args.real_wechat)
+
+    def test_agent_run_real_wechat_flag(self) -> None:
+        args = build_parser().parse_args(["agent-run", "--real-wechat"])
+        self.assertTrue(args.real_wechat)
 
 
 if __name__ == "__main__":

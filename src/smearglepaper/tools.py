@@ -8,6 +8,7 @@ from .workflow import SmearglePaperWorkflow
 SYSTEM_PROMPT = """你是 SmearglePaper，AI 论文信息助手。你可以：
 - 收集 arXiv 论文、博客、GitHub 热门仓库
 - 对论文排名、解读、生成中文文章
+- 运行证据优先的论文写作 Agent，自动规划、审稿和修订
 - 创建微信公众号草稿
 - 分析研究趋势
 
@@ -110,6 +111,43 @@ TOOLS: list[dict[str, Any]] = [
                     "paper_id": {"type": "string", "description": "论文 ID"},
                 },
                 "required": ["paper_id"],
+            },
+        },
+    },
+    {
+        "type": "function",
+        "function": {
+            "name": "run_writing_agent",
+            "description": "运行论文写作 Agent：建立证据包、规划文章、生成草稿、证据审稿、自动修订并输出最终文章",
+            "parameters": {
+                "type": "object",
+                "properties": {
+                    "paper_id": {"type": "string", "description": "已解析论文 ID"},
+                    "paper_url": {"type": "string", "description": "论文 URL；本地无解析产物时自动下载解析"},
+                    "paper_title": {"type": "string", "description": "可选的展示标题"},
+                    "notes_path": {"type": "string", "description": "可选的用户读书笔记路径"},
+                    "article_path": {"type": "string", "description": "可选的待诊断和改写原始文章路径"},
+                    "target_audience": {"type": "string", "description": "目标读者"},
+                    "style_mode": {"type": "string", "enum": ["rigorous", "popular", "interview", "balanced"]},
+                    "target_score": {"type": "integer", "description": "目标审稿分数，默认 85"},
+                    "max_revisions": {"type": "integer", "description": "最大自动修订轮数，默认 3"},
+                    "upload_images": {"type": "boolean", "description": "内容审稿通过后上传本地图片并替换链接"},
+                },
+            },
+        },
+    },
+    {
+        "type": "function",
+        "function": {
+            "name": "prepare_agent_assets",
+            "description": "为已通过内容审稿的 Agent 文章上传本地图片，并生成发布就绪版本",
+            "parameters": {
+                "type": "object",
+                "properties": {
+                    "article_json": {"type": "string", "description": "已有 Agent 草稿 JSON 路径"},
+                    "target_score": {"type": "integer", "description": "目标审稿分数，默认 85"},
+                },
+                "required": ["article_json"],
             },
         },
     },
@@ -281,6 +319,38 @@ def execute_tool(name: str, arguments: dict[str, Any]) -> str:
             parsed = read_json(parsed_path, {})
             result = workflow.write_article(paper, parsed=parsed)
             return json.dumps({"status": "ok", "outputs": result}, ensure_ascii=False)
+
+        elif name == "run_writing_agent":
+            from pathlib import Path
+            result = workflow.run_writing_agent(
+                arguments.get("paper_id"),
+                paper_url=arguments.get("paper_url"),
+                paper_title=arguments.get("paper_title"),
+                notes_path=Path(arguments["notes_path"]) if arguments.get("notes_path") else None,
+                article_path=Path(arguments["article_path"]) if arguments.get("article_path") else None,
+                target_audience=arguments.get("target_audience", "AI方向研究生和算法岗候选人"),
+                style_mode=arguments.get("style_mode", "balanced"),
+                target_score=arguments.get("target_score", 85),
+                max_revisions=arguments.get("max_revisions", 3),
+                upload_images=arguments.get("upload_images", False),
+            )
+            return json.dumps(
+                {
+                    "status": result.get("status"),
+                    "run_dir": result.get("run_dir"),
+                    "manifest": result.get("manifest"),
+                    "final": result.get("final"),
+                },
+                ensure_ascii=False,
+            )
+
+        elif name == "prepare_agent_assets":
+            from pathlib import Path
+            result = workflow.prepare_agent_assets(
+                Path(arguments["article_json"]),
+                target_score=arguments.get("target_score", 85),
+            )
+            return json.dumps(result, ensure_ascii=False)
 
         elif name == "review_article":
             from .quality import review_article_file

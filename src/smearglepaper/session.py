@@ -1,15 +1,27 @@
 from __future__ import annotations
 
-import json
 import uuid
 from dataclasses import dataclass, field
-from datetime import datetime, timezone
+from datetime import datetime, timedelta, timezone
 from pathlib import Path
+from threading import Lock
 
 from .config import DATA_DIR
 from .storage import read_json, write_json
 
 SESSIONS_DIR = DATA_DIR / "sessions"
+_timestamp_lock = Lock()
+_last_timestamp = datetime.min.replace(tzinfo=timezone.utc)
+
+
+def _now_iso() -> str:
+    global _last_timestamp
+    with _timestamp_lock:
+        now = datetime.now(timezone.utc)
+        if now <= _last_timestamp:
+            now = _last_timestamp + timedelta(microseconds=1)
+        _last_timestamp = now
+        return now.isoformat()
 
 
 def _ensure_dir() -> None:
@@ -26,7 +38,7 @@ class Session:
 
     @staticmethod
     def create(title: str = "新对话") -> Session:
-        now = datetime.now(timezone.utc).isoformat()
+        now = _now_iso()
         return Session(
             id=uuid.uuid4().hex[:12],
             title=title,
@@ -55,7 +67,7 @@ class Session:
         )
 
     def touch(self) -> None:
-        self.updated_at = datetime.now(timezone.utc).isoformat()
+        self.updated_at = _now_iso()
 
 
 def save_session(session: Session) -> Path:
@@ -83,7 +95,7 @@ def list_sessions() -> list[Session]:
                 sessions.append(Session.from_dict(data))
         except Exception:
             continue
-    sessions.sort(key=lambda s: s.updated_at, reverse=True)
+    sessions.sort(key=lambda session: session.updated_at, reverse=True)
     return sessions
 
 
@@ -94,8 +106,8 @@ def delete_session(session_id: str) -> None:
 
 
 def auto_title(messages: list[dict[str, object]]) -> str:
-    for msg in messages:
-        if msg.get("role") == "user":
-            text = str(msg.get("content", ""))
+    for message in messages:
+        if message.get("role") == "user":
+            text = str(message.get("content", ""))
             return text[:30] + ("..." if len(text) > 30 else "")
     return "新对话"

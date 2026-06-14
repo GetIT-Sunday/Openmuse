@@ -11,7 +11,6 @@ from .config import DATA_DIR, runtime_settings
 from .editor import improve_article_file
 from .llm import check_llm_connection
 from .models import PaperMeta
-from .quality import review_article_file
 from .scout import run_scout_review
 from .storage import read_json
 from .wechat import WechatClient
@@ -113,6 +112,25 @@ def build_parser() -> argparse.ArgumentParser:
     gen_alias = _add_alias(sub, "write", "generate-article", "Generate a WeChat Markdown and HTML article")
     gen_alias.add_argument("--paper-id", required=True)
 
+    # --- writing-agent ---
+    writing_agent = sub.add_parser("writing-agent", help="Run the evidence-first Paper Writing Agent")
+    writing_source = writing_agent.add_mutually_exclusive_group(required=True)
+    writing_source.add_argument("--paper-id")
+    writing_source.add_argument("--paper-url")
+    writing_agent.add_argument("--paper-title", help="Optional display title override")
+    writing_agent.add_argument("--mode", choices=["paper-writing"], default="paper-writing")
+    writing_agent.add_argument("--notes", "--input-note", dest="notes", help="Optional Markdown/text notes file")
+    writing_agent.add_argument("--input-article", help="Optional existing article to diagnose and rewrite")
+    writing_agent.add_argument("--target-audience", default="AI方向研究生和算法岗候选人")
+    writing_agent.add_argument("--style-mode", choices=["rigorous", "popular", "interview", "balanced"], default="balanced")
+    writing_agent.add_argument("--target-score", type=int, default=85)
+    writing_agent.add_argument("--max-revisions", type=int, default=3)
+    writing_agent.add_argument("--upload-images", action="store_true", help="Upload local article images to WeChat after content review passes")
+
+    prepare_assets = sub.add_parser("prepare-agent-assets", help="Upload images for an existing content-ready Agent article")
+    prepare_assets.add_argument("--article-json", required=True)
+    prepare_assets.add_argument("--target-score", type=int, default=85)
+
     # --- review-article ---
     review = sub.add_parser("review-article", help="Review a generated article Markdown or JSON file")
     review.add_argument("path")
@@ -153,7 +171,10 @@ def build_parser() -> argparse.ArgumentParser:
     agent.add_argument("--skip-blogs", action="store_true")
     agent.add_argument("--skip-improve", action="store_true")
     agent.add_argument("--skip-draft", action="store_true")
-    agent.add_argument("--real-wechat", action="store_true", help="Create a real WeChat draft instead of dry-run output")
+    publish_mode = agent.add_mutually_exclusive_group()
+    publish_mode.add_argument("--dry-run", dest="real_wechat", action="store_false", help="Create local dry-run output only (default)")
+    publish_mode.add_argument("--real-wechat", action="store_true", help="Create a real WeChat draft instead of dry-run output")
+    agent.set_defaults(real_wechat=False)
     agent.add_argument("--resume", action="store_true", help="Resume from existing artifacts, skip completed steps")
 
     # --- check-status (was: check-agents, agent-check) ---
@@ -294,8 +315,25 @@ def main(argv: list[str] | None = None) -> None:
             paper = _find_paper(args.paper_id)
             parsed_path = DATA_DIR / "parsed" / f"{paper.paper_id.replace('/', '_')}.json"
             _print(workflow.write_article(paper, parsed=read_json(parsed_path, {})))
+        elif command == "writing-agent":
+            _print(
+                workflow.run_writing_agent(
+                    args.paper_id,
+                    paper_url=args.paper_url,
+                    paper_title=args.paper_title,
+                    notes_path=Path(args.notes) if args.notes else None,
+                    article_path=Path(args.input_article) if args.input_article else None,
+                    target_audience=args.target_audience,
+                    style_mode=args.style_mode,
+                    target_score=args.target_score,
+                    max_revisions=args.max_revisions,
+                    upload_images=args.upload_images,
+                )
+            )
+        elif command == "prepare-agent-assets":
+            _print(workflow.prepare_agent_assets(Path(args.article_json), target_score=args.target_score))
         elif command == "review-article":
-            _print(review_article_file(Path(args.path)))
+            _print(workflow.review_article(Path(args.path)))
         elif command == "improve-article":
             output_prefix = Path(args.output_prefix) if args.output_prefix else None
             _print(improve_article_file(Path(args.path), output_prefix))
@@ -375,6 +413,11 @@ def _find_paper(paper_id: str) -> PaperMeta:
 
 
 def _print(payload: object) -> None:
+    if hasattr(sys.stdout, "reconfigure"):
+        try:
+            sys.stdout.reconfigure(encoding="utf-8", errors="replace")
+        except (AttributeError, OSError):
+            pass
     print(json.dumps(payload, ensure_ascii=False, indent=2))
 
 

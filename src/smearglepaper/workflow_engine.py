@@ -51,6 +51,18 @@ WORKFLOWS: dict[str, dict[str, Any]] = {
             {"id": "publish-wechat", "label": "Publish WeChat"},
         ],
     },
+    "paper-writing-agent-flow": {
+        "id": "paper-writing-agent-flow",
+        "label": "paper-writing-agent-flow",
+        "steps": [
+            {"id": "prepare-evidence", "label": "Prepare Evidence"},
+            {"id": "plan-article", "label": "Plan Argument"},
+            {"id": "generate-article", "label": "Draft Article"},
+            {"id": "review-article", "label": "Evidence Review"},
+            {"id": "improve-article", "label": "Revise Article"},
+            {"id": "finalize-article", "label": "Finalize Article"},
+        ],
+    },
 }
 
 
@@ -64,6 +76,11 @@ def parse_intent(message: str) -> tuple[str, str]:
     lower = message.lower()
 
     # Paper-related
+    writing_agent_keywords = ["写作agent", "writing agent", "论文写作", "自动修订", "证据审稿"]
+    if any(k in lower for k in writing_agent_keywords):
+        topic = _extract_topic(message)
+        return "paper-writing-agent-flow", topic
+
     paper_keywords = ["论文", "paper", "arxiv", "收集", "搜索", "检索"]
     if any(k in lower for k in paper_keywords):
         topic = _extract_topic(message)

@@ -1,5 +1,7 @@
 # SmearglePaper
 
+Product roadmap: [PRODUCT_AGENT_PLAN.md](PRODUCT_AGENT_PLAN.md)
+
 SmearglePaper turns recent AI papers into structured Chinese article drafts.
 
 It can collect arXiv papers, rank candidates, parse PDFs, extract figure candidates, generate Chinese close-reading articles, render WeChat-friendly HTML, create cover images, prepare WeChat drafts, and expose the workflow as MCP tools.
@@ -54,6 +56,37 @@ Without installing the console script, run:
 ```bash
 python -m smearglepaper preflight
 python -m smearglepaper draft --paper-url https://arxiv.org/abs/2401.00001 --dry-run
+```
+
+### Paper Writing Agent
+
+After ingesting a paper, run the evidence-first writing Agent:
+
+```bash
+python -m smearglepaper.cli writing-agent \
+  --mode paper-writing \
+  --paper-title "Attention Is All You Need" \
+  --paper-url https://arxiv.org/abs/1706.03762 \
+  --input-note workspace/paper_writing/inputs/attention_note.md \
+  --target-audience "AI方向研究生和算法岗候选人" \
+  --style-mode balanced \
+  --max-revisions 3 \
+  --upload-images
+```
+
+The Agent runs NoteDiagnoser, StyleAnalyst, OutlinePlanner, DraftWriter,
+TechnicalReviewer, WeChatEditor, RevisionLoop, and PublishPackager. Run artifacts
+are stored under `workspace/paper_writing/<run-id>/`; the final compatible article
+is also written to `data/articles/<paper-id>.agent.*`.
+
+The run manifest separates `content_ready` from `publish_ready`. Local image paths
+block publication until uploaded, without triggering unnecessary LLM rewrites.
+Set `LLM_MAX_TOKENS` when longer or shorter generation limits are required.
+
+To resume only the asset-upload stage for an existing content-ready draft:
+
+```bash
+python -m smearglepaper.cli prepare-agent-assets --article-json workspace/paper_writing/<run-id>/drafts/draft_v2.json
 ```
 
 Generated runtime files are written to `data/`:

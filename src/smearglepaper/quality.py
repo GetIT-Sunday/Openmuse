@@ -3,6 +3,8 @@ from __future__ import annotations
 import re
 from pathlib import Path
 
+from .config import DATA_DIR
+from .evidence import audit_article_evidence
 from .models import Article
 from .storage import read_json
 
@@ -42,20 +44,25 @@ def _avg_sentence_length(text: str) -> float:
 
 
 def review_article_file(path: Path) -> dict[str, object]:
+    paper_id = ""
     if path.suffix == ".json":
         article = Article.from_dict(read_json(path, {}))
         markdown = article.markdown
         title = article.title
         figure_count = len(article.figure_paths)
+        paper_id = article.paper.paper_id
     else:
         markdown = path.read_text(encoding="utf-8")
         title = _title_from_markdown(markdown)
         figure_count = markdown.count("![")
+        paper_id = path.stem.removesuffix(".optimized")
 
     issues: list[dict[str, str]] = []
     suggestions: list[str] = []
     char_count = len(markdown)
     headings = re.findall(r"^#{1,3}\s+(.+)$", markdown, flags=re.MULTILINE)
+    parsed = read_json(DATA_DIR / "parsed" / f"{paper_id.replace('/', '_')}.json", {})
+    evidence_audit = audit_article_evidence(markdown, parsed)
 
     if char_count < 2500:
         issues.append({"severity": "medium", "message": "文章偏短，适合作为快读稿；若要公众号深度解读，建议扩到 3000-5000 字。"})
@@ -83,6 +90,21 @@ def review_article_file(path: Path) -> dict[str, object]:
     if "http://arxiv.org/abs/" not in markdown and "https://arxiv.org/abs/" not in markdown:
         issues.append({"severity": "medium", "message": "未检测到 arXiv 论文链接。"})
 
+    if evidence_audit.get("available"):
+        unverified_numbers = evidence_audit.get("unverified_numbers", [])
+        unknown_refs = evidence_audit.get("unknown_visual_references", [])
+        available_refs = evidence_audit.get("available_visual_references", [])
+        referenced_visuals = evidence_audit.get("referenced_visuals", [])
+        if unverified_numbers:
+            shown = "、".join(str(value) for value in unverified_numbers[:8])
+            issues.append({"severity": "high", "message": f"以下数字无法在原论文正文中定位：{shown}"})
+            suggestions.append("逐项核对实验数字；若数字来自外部资料，应标明来源，不要归因于原论文。")
+        if unknown_refs:
+            issues.append({"severity": "high", "message": "引用了原论文中未识别到的图表：" + "、".join(str(value) for value in unknown_refs)})
+        if available_refs and not referenced_visuals:
+            issues.append({"severity": "low", "message": "原论文存在可用核心图表，但正文没有按 Figure/Table 编号进行讲解。"})
+            suggestions.append("选择最关键的 Figure/Table，说明它回答的问题、观察结果与推断边界。")
+
     score = 100
     for issue in issues:
         score -= {"high": 25, "medium": 12, "low": 5}.get(issue["severity"], 5)
@@ -103,6 +125,9 @@ def review_article_file(path: Path) -> dict[str, object]:
         ]
 
     checks = _check_dimensions(markdown, headings, figure_count, char_count)
+    if evidence_audit.get("available"):
+        for name, passed in evidence_audit.get("checks", {}).items():
+            checks[name] = {"pass": bool(passed), "weight": 0.20}
 
     return {
         "path": str(path),
@@ -115,6 +140,7 @@ def review_article_file(path: Path) -> dict[str, object]:
         "pass": score >= REVIEW_THRESHOLD,
         "verdict": verdict,
         "checks": {name: {"pass": c["pass"], "weight": c["weight"]} for name, c in checks.items()},
+        "evidence_audit": evidence_audit,
         "issues": issues,
         "suggestions": suggestions,
     }

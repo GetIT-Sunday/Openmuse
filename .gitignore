@@ -1,4 +1,6 @@
 data/
+workspace/
+memory/article_history.json
 __pycache__/
 .pytest_cache/
 .venv/
