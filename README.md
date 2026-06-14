@@ -2,6 +2,19 @@
 
 Product roadmap: [PRODUCT_AGENT_PLAN.md](PRODUCT_AGENT_PLAN.md)
 
+Create and manage a durable product task:
+
+```bash
+smearglepaper agent "解读这篇论文" --paper-url https://arxiv.org/abs/1706.03762
+smearglepaper task-resume --task-id <task-id>
+smearglepaper task-show --task-id <task-id>
+smearglepaper task-approve --task-id <task-id> --gate publish
+smearglepaper task-resume --task-id <task-id> --real-wechat
+```
+
+`task-resume --real-wechat` only creates or updates a draft after an explicit
+publish approval. It never formally publishes the draft.
+
 SmearglePaper turns recent AI papers into structured Chinese article drafts.
 
 It can collect arXiv papers, rank candidates, parse PDFs, extract figure candidates, generate Chinese close-reading articles, render WeChat-friendly HTML, create cover images, prepare WeChat drafts, and expose the workflow as MCP tools.

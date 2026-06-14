@@ -285,6 +285,16 @@ class CoreTests(unittest.TestCase):
         self.assertEqual(args.topic, "agents")
         self.assertFalse(args.real_wechat)
 
+    def test_product_agent_task_parsers(self) -> None:
+        created = build_parser().parse_args(["agent", "解读这篇论文", "--paper-id", "1706.03762"])
+        approved = build_parser().parse_args(["task-approve", "--task-id", "task-1", "--gate", "publish"])
+        resumed = build_parser().parse_args(["task-resume", "--task-id", "task-1", "--real-wechat"])
+
+        self.assertEqual(created.command, "agent")
+        self.assertEqual(created.paper_id, "1706.03762")
+        self.assertEqual(approved.gate, "publish")
+        self.assertTrue(resumed.real_wechat)
+
     def test_writing_agent_parser_defaults(self) -> None:
         args = build_parser().parse_args(["writing-agent", "--paper-id", "1706.03762"])
         self.assertEqual(args.command, "writing-agent")

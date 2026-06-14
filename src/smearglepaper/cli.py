@@ -47,6 +47,27 @@ def build_parser() -> argparse.ArgumentParser:
     parser = argparse.ArgumentParser(prog="smearglepaper", description="AI paper to Chinese article draft automation")
     sub = parser.add_subparsers(dest="command", required=True)
 
+    # --- product-level task agent ---
+    product_agent = sub.add_parser("agent", help="Create a durable product task from a natural-language request")
+    product_agent.add_argument("request")
+    product_source = product_agent.add_mutually_exclusive_group()
+    product_source.add_argument("--paper-id")
+    product_source.add_argument("--paper-url")
+    product_source.add_argument("--article-json", help="Use an existing publish-ready article")
+
+    sub.add_parser("tasks", help="List durable product tasks")
+
+    task_show = sub.add_parser("task-show", help="Show one durable product task")
+    task_show.add_argument("--task-id", required=True)
+
+    task_approve = sub.add_parser("task-approve", help="Approve a waiting product task gate")
+    task_approve.add_argument("--task-id", required=True)
+    task_approve.add_argument("--gate", required=True, choices=["topic", "publish"])
+
+    task_resume = sub.add_parser("task-resume", help="Resume a durable product task")
+    task_resume.add_argument("--task-id", required=True)
+    task_resume.add_argument("--real-wechat", action="store_true", help="Allow a previously approved task to create or update a real WeChat draft")
+
     # --- collect-arxiv (was: collect) ---
     collect = sub.add_parser("collect-arxiv", help="Collect recent arXiv papers")
     collect.add_argument("--topic", help=f"Preset topic. Available: {', '.join(topic_names())}")
@@ -293,7 +314,34 @@ def main(argv: list[str] | None = None) -> None:
     workflow = SmearglePaperWorkflow()
 
     try:
-        if command == "collect-arxiv":
+        if command == "agent":
+            from .product_agent import ProductAgent
+
+            _print(
+                ProductAgent().create(
+                    args.request,
+                    paper_id=args.paper_id,
+                    paper_url=args.paper_url,
+                    article_json=Path(args.article_json) if args.article_json else None,
+                )
+            )
+        elif command == "tasks":
+            from .product_agent import ProductAgent
+
+            _print(ProductAgent().list())
+        elif command == "task-show":
+            from .product_agent import ProductAgent
+
+            _print(ProductAgent().show(args.task_id))
+        elif command == "task-approve":
+            from .product_agent import ProductAgent
+
+            _print(ProductAgent().approve(args.task_id, args.gate))
+        elif command == "task-resume":
+            from .product_agent import ProductAgent
+
+            _print(ProductAgent().resume(args.task_id, real_wechat=args.real_wechat))
+        elif command == "collect-arxiv":
             # Handle alias with --sources flag
             sources = getattr(args, "sources", ["arxiv"])
             papers = workflow.collect(args.topic, args.query, args.days, sources, args.max_results)
