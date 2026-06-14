@@ -464,7 +464,7 @@ class SmearglePaperWorkflow:
         article_paths = self.write_article(paper, parsed=parsed_payload)
         article = Article.from_dict(read_json(Path(article_paths["article_json"]), {}))
         report = WechatClient(dry_run=dry_run).create_draft(article)
-        write_json(DATA_DIR / "wechat" / f"{paper.paper_id.replace('/', '_')}.json", report)
+        write_json(_wechat_result_path(paper.paper_id, real_wechat=not dry_run), report)
         return {"paper": paper.to_dict(), "parsed": parsed, "article": article_paths, "draft": report}
 
     def auto_publish(self, topic: str | None, query: str | None, paper_url: str | None, days: int, top_k: int, create_draft: bool, auto_publish: bool, no_publish: bool) -> dict[str, object]:
@@ -481,7 +481,7 @@ class SmearglePaperWorkflow:
         client = WechatClient(dry_run=not real_wechat)
         report = client.create_draft(article)
         pid = article.paper.paper_id.replace("/", "_")
-        write_json(DATA_DIR / "wechat" / f"{pid}.json", report)
+        write_json(_wechat_result_path(pid, real_wechat=real_wechat), report)
         if publish and real_wechat and report.get("media_id"):
             report["publish_id"] = client.publish_draft(str(report["media_id"]))
             write_json(DATA_DIR / "published" / f"{pid}.json", report)
@@ -490,7 +490,7 @@ class SmearglePaperWorkflow:
     def update_existing_draft(self, article_json: Path, media_id: str, real_wechat: bool, index: int = 0) -> dict[str, object]:
         article = Article.from_dict(read_json(article_json, {}))
         report = WechatClient(dry_run=not real_wechat).update_draft(article, media_id, index)
-        write_json(DATA_DIR / "wechat" / f"{article.paper.paper_id.replace('/', '_')}.json", report)
+        write_json(_wechat_result_path(article.paper.paper_id, real_wechat=real_wechat), report)
         return report
 
     def preflight(self) -> dict[str, object]:
@@ -760,6 +760,11 @@ def _article_title(markdown: str, fallback: str) -> str:
         if line.startswith("# "):
             return line[2:].strip()
     return fallback
+
+
+def _wechat_result_path(paper_id: str, *, real_wechat: bool) -> Path:
+    directory = DATA_DIR / "wechat" if real_wechat else DATA_DIR / "wechat" / "dry_run"
+    return directory / f"{paper_id.replace('/', '_')}.json"
 
 
 def append_figures(markdown: str, figure_paths: list[str]) -> str:

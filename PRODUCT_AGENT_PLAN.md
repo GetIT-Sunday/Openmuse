@@ -1,5 +1,9 @@
 # SmearglePaper Product Agent Execution Plan
 
+> Current optimization review: [PRODUCT_OPTIMIZATION_REVIEW.md](PRODUCT_OPTIMIZATION_REVIEW.md).
+> Reliability, approval safety, and preview integrity now take priority over
+> scheduling and additional ranking features.
+
 ## 1. Product Goal
 
 Turn the existing paper writing pipeline into a user-facing Paper Content Agent:

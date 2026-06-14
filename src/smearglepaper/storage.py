@@ -2,6 +2,8 @@ from __future__ import annotations
 
 import datetime as dt
 import json
+import os
+import uuid
 from pathlib import Path
 from typing import TypeVar
 
@@ -20,7 +22,13 @@ def read_json(path: Path, default: T) -> T:
 
 def write_json(path: Path, payload: object) -> None:
     ensure_parent(path)
-    path.write_text(json.dumps(payload, ensure_ascii=False, indent=2), encoding="utf-8")
+    temporary = path.with_name(f".{path.name}.{uuid.uuid4().hex}.tmp")
+    try:
+        temporary.write_text(json.dumps(payload, ensure_ascii=False, indent=2), encoding="utf-8")
+        os.replace(temporary, path)
+    finally:
+        if temporary.exists():
+            temporary.unlink()
 
 
 def write_dated_json(directory: Path, prefix: str, payload: object, *, date: str | None = None) -> Path:

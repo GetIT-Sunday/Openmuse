@@ -254,7 +254,7 @@ class WorkflowReliabilityTests(unittest.TestCase):
                 result = SmearglePaperWorkflow().publish_existing_article(article_path, real_wechat=False, publish=False)
 
             self.assertTrue(result["ok"])
-            self.assertTrue((data_dir / "wechat" / "test.json").exists())
+            self.assertTrue((data_dir / "wechat" / "dry_run" / "test.json").exists())
 
     def test_resume_rereviews_when_article_is_regenerated(self) -> None:
         with tempfile.TemporaryDirectory() as tmp:

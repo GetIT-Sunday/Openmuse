@@ -289,12 +289,14 @@ class CoreTests(unittest.TestCase):
         created = build_parser().parse_args(["agent", "解读这篇论文", "--paper-id", "1706.03762"])
         approved = build_parser().parse_args(["task-approve", "--task-id", "task-1", "--gate", "publish"])
         resumed = build_parser().parse_args(["task-resume", "--task-id", "task-1", "--real-wechat"])
+        retried = build_parser().parse_args(["task-retry", "--task-id", "task-1"])
 
         self.assertEqual(created.command, "agent")
         self.assertEqual(created.paper_id, "1706.03762")
         self.assertEqual(created.ranking_profile, "balanced")
         self.assertEqual(approved.gate, "publish")
         self.assertTrue(resumed.real_wechat)
+        self.assertEqual(retried.task_id, "task-1")
 
     def test_writing_agent_parser_defaults(self) -> None:
         args = build_parser().parse_args(["writing-agent", "--paper-id", "1706.03762"])

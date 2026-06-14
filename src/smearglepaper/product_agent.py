@@ -3,10 +3,15 @@ from __future__ import annotations
 import re
 from pathlib import Path
 
+from .agent_reviews import technical_review, wechat_review
+from .artifact_integrity import article_bundle_fingerprint
 from .candidate_selection import RANKING_PROFILES, select_candidates
-from .models import PaperMeta
+from .config import DATA_DIR
+from .models import Article, PaperMeta
 from .product_tasks import ProductTask, ProductTaskRepository
+from .storage import read_json
 from .workflow import SmearglePaperWorkflow
+from .writing_agent import _content_meets_target, _meets_target
 
 
 class ProductAgent:
@@ -52,7 +57,6 @@ class ProductAgent:
         if article_json:
             task.artifacts["final_article_json"] = str(article_json)
             task.transition("reviewing", "imported-article-review")
-            task.transition("awaiting_publish_approval", "publish-approval")
         elif paper_id or paper_url:
             task.selected_paper = {"paper_id": paper_id, "url": paper_url}
             task.transition("researching", "paper-research")
@@ -65,20 +69,33 @@ class ProductAgent:
     def resume(self, task_id: str, *, real_wechat: bool = False) -> dict[str, object]:
         task = self.repository.load(task_id)
         try:
-            if task.status in {"researching", "writing", "reviewing"}:
+            if task.status in {"researching", "writing"}:
                 return self._run_writing(task)
+            if task.status == "reviewing":
+                return self._review_existing_article(task)
             if task.status == "discovering":
                 return self._discover(task)
             if task.status == "creating_draft":
                 return self._create_or_update_draft(task, real_wechat=real_wechat)
+            if task.status == "draft_simulated" and real_wechat:
+                task.transition("creating_draft", "create-wechat-draft")
+                self.repository.save(task)
+                return self._create_or_update_draft(task, real_wechat=True)
             if task.status in {"awaiting_topic_approval", "awaiting_publish_approval"}:
                 return self._result(task, self.repository.path(task.task_id))
             return self._result(task, self.repository.path(task.task_id))
         except Exception as exc:
+            recovery_status = task.status
+            recovery_stage = task.active_stage
             task.transition(
                 "failed",
-                task.active_stage,
-                error={"type": type(exc).__name__, "message": str(exc)},
+                recovery_stage,
+                error={
+                    "type": type(exc).__name__,
+                    "message": str(exc),
+                    "recovery_status": recovery_status,
+                    "recovery_stage": recovery_stage,
+                },
             )
             manifest = self.repository.save(task)
             raise RuntimeError(f"Product task {task.task_id} failed at {task.active_stage}: {exc}") from exc
@@ -96,7 +113,8 @@ class ProductAgent:
         else:
             if not artifact:
                 raise ValueError("Publish approval requires a final article artifact.")
-            task.approve(gate, artifact=artifact)
+            fingerprint = article_bundle_fingerprint(Path(artifact))
+            task.approve(gate, artifact=artifact, detail={"fingerprint": fingerprint})
             task.transition("creating_draft", "create-wechat-draft")
         manifest = self.repository.save(task)
         return self._result(task, manifest)
@@ -107,6 +125,18 @@ class ProductAgent:
     def list(self) -> dict[str, object]:
         rows = self.repository.list()
         return {"count": len(rows), "tasks": rows}
+
+    def retry(self, task_id: str) -> dict[str, object]:
+        task = self.repository.load(task_id)
+        if task.status not in {"failed", "needs_attention"} or not task.error:
+            raise ValueError("Task is not in a retryable state.")
+        recovery_status = str(task.error.get("recovery_status") or "")
+        recovery_stage = str(task.error.get("recovery_stage") or recovery_status)
+        if not recovery_status:
+            raise ValueError("Task has no recorded recovery route.")
+        task.transition(recovery_status, recovery_stage)
+        manifest = self.repository.save(task)
+        return self._result(task, manifest)
 
     def _discover(self, task: ProductTask) -> dict[str, object]:
         query = str(task.plan.get("query") or task.request.get("message") or "")
@@ -122,7 +152,12 @@ class ProductAgent:
             task.transition(
                 "needs_attention",
                 "candidate-ranking",
-                error={"type": "NoCandidates", "message": "No unpublished candidate papers were found."},
+                error={
+                    "type": "NoCandidates",
+                    "message": "No unpublished candidate papers were found.",
+                    "recovery_status": "discovering",
+                    "recovery_stage": "candidate-discovery",
+                },
             )
         else:
             task.transition("awaiting_topic_approval", "topic-approval")
@@ -147,12 +182,18 @@ class ProductAgent:
         task.artifacts["publish_ready"] = bool(final.get("publish_ready"))
         task.transition("reviewing", "quality-gate")
         if final.get("publish_ready"):
+            task.artifacts["article_fingerprint"] = article_bundle_fingerprint(Path(str(final.get("article_json"))))
             task.transition("awaiting_publish_approval", "publish-approval")
         else:
             task.transition(
                 "needs_attention",
                 "quality-gate",
-                error={"type": "QualityGate", "message": "Article is not publish_ready."},
+                error={
+                    "type": "QualityGate",
+                    "message": "Article is not publish_ready.",
+                    "recovery_status": "reviewing",
+                    "recovery_stage": "quality-gate",
+                },
             )
         manifest = self.repository.save(task)
         return self._result(task, manifest)
@@ -164,16 +205,69 @@ class ProductAgent:
             raise RuntimeError("A current publish approval is required.")
         if not article_json.exists():
             raise RuntimeError(f"Approved article artifact not found: {article_json}")
-        media_id = str(task.wechat.get("media_id") or "")
+        approved_fingerprint = dict(approval.get("detail", {})).get("fingerprint")
+        current_fingerprint = article_bundle_fingerprint(article_json)
+        if approved_fingerprint != current_fingerprint:
+            task.invalidate_approval("publish", "Approved article or asset content changed.")
+            task.transition(
+                "reviewing",
+                "stale-publish-approval",
+                error={
+                    "type": "StaleApproval",
+                    "message": "Article changed after publish approval.",
+                    "recovery_status": "reviewing",
+                    "recovery_stage": "imported-article-review",
+                },
+            )
+            manifest = self.repository.save(task)
+            return self._result(task, manifest)
+        real_state = dict(task.wechat.get("real", {}))
+        media_id = str(real_state.get("media_id") or "") if real_wechat else ""
         if media_id:
             report = self.workflow.update_existing_draft(article_json, media_id, real_wechat=real_wechat)
         else:
             report = self.workflow.publish_existing_article(article_json, real_wechat=real_wechat, publish=False)
         if not report.get("ok"):
             raise RuntimeError(f"WeChat draft operation failed: {report}")
-        task.wechat["media_id"] = report.get("media_id")
-        task.artifacts["wechat_draft"] = report
-        task.transition("draft_created", "complete")
+        if real_wechat:
+            task.wechat["real"] = {"media_id": report.get("media_id"), "publish_id": report.get("publish_id")}
+            task.transition("draft_created", "complete")
+        else:
+            task.wechat["dry_run"] = report
+            task.transition("draft_simulated", "publish-approval")
+        task.artifacts["wechat_draft"] = {"environment": "real" if real_wechat else "dry_run", "report": report}
+        manifest = self.repository.save(task)
+        return self._result(task, manifest)
+
+    def _review_existing_article(self, task: ProductTask) -> dict[str, object]:
+        article_json = Path(str(task.artifacts.get("final_article_json", "")))
+        if not article_json.exists():
+            raise RuntimeError(f"Article artifact not found: {article_json}")
+        article = Article.from_dict(read_json(article_json, {}))
+        parsed = read_json(DATA_DIR / "parsed" / f"{article.paper.paper_id.replace('/', '_')}.json", {})
+        technical, _ = technical_review(article.markdown, article.paper, parsed)
+        wechat, _ = wechat_review(article.markdown)
+        target_score = int(task.request.get("target_score", 85))
+        content_ready = _content_meets_target(technical, wechat, target_score)
+        publish_ready = _meets_target(technical, wechat, target_score)
+        task.artifacts["technical_review"] = technical
+        task.artifacts["wechat_review"] = wechat
+        task.artifacts["content_ready"] = content_ready
+        task.artifacts["publish_ready"] = publish_ready
+        task.artifacts["article_fingerprint"] = article_bundle_fingerprint(article_json)
+        if publish_ready:
+            task.transition("awaiting_publish_approval", "publish-approval")
+        else:
+            task.transition(
+                "needs_attention",
+                "imported-article-review",
+                error={
+                    "type": "QualityGate",
+                    "message": "Imported article is not publish_ready.",
+                    "recovery_status": "reviewing",
+                    "recovery_stage": "imported-article-review",
+                },
+            )
         manifest = self.repository.save(task)
         return self._result(task, manifest)
 
@@ -200,6 +294,7 @@ def _next_action(task: ProductTask) -> str:
         "awaiting_topic_approval": f"Approve topic for task {task.task_id}.",
         "awaiting_publish_approval": f"Review preview and approve publish for task {task.task_id}.",
         "creating_draft": f"Resume task {task.task_id} to create or update the WeChat draft.",
+        "draft_simulated": f"Dry-run completed. Resume task {task.task_id} with real WeChat enabled after review.",
         "needs_attention": "Resolve the reported issue, then resume the task.",
         "draft_created": "Review the WeChat draft in the Official Account backend.",
     }.get(task.status, "")

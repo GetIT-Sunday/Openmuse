@@ -8,7 +8,7 @@ from pathlib import Path
 from .config import DATA_DIR
 from .storage import read_json, write_json
 
-TASK_SCHEMA_VERSION = 1
+TASK_SCHEMA_VERSION = 2
 
 TERMINAL_STATUSES = {"draft_created", "published", "failed", "cancelled"}
 
@@ -22,9 +22,10 @@ ALLOWED_TRANSITIONS: dict[str, set[str]] = {
     "reviewing": {"preparing_assets", "awaiting_publish_approval", "needs_attention", "failed", "cancelled"},
     "preparing_assets": {"awaiting_publish_approval", "needs_attention", "failed", "cancelled"},
     "awaiting_publish_approval": {"creating_draft", "reviewing", "cancelled"},
-    "creating_draft": {"draft_created", "needs_attention", "failed"},
+    "creating_draft": {"reviewing", "draft_simulated", "draft_created", "needs_attention", "failed"},
+    "draft_simulated": {"creating_draft", "cancelled"},
     "draft_created": {"creating_draft", "published"},
-    "needs_attention": {"planning", "researching", "writing", "reviewing", "preparing_assets", "creating_draft", "cancelled"},
+    "needs_attention": {"planning", "discovering", "researching", "writing", "reviewing", "preparing_assets", "creating_draft", "cancelled"},
     "failed": {"planning", "researching", "writing", "reviewing", "preparing_assets", "creating_draft", "cancelled"},
     "published": set(),
     "cancelled": set(),
@@ -48,10 +49,16 @@ class ProductTask:
     approvals: list[dict[str, object]] = field(default_factory=list)
     artifacts: dict[str, object] = field(default_factory=dict)
     writing_run_id: str | None = None
-    wechat: dict[str, object] = field(default_factory=lambda: {"media_id": None, "publish_id": None})
+    wechat: dict[str, object] = field(
+        default_factory=lambda: {
+            "real": {"media_id": None, "publish_id": None},
+            "dry_run": {},
+        }
+    )
     metrics: dict[str, object] = field(default_factory=dict)
     error: dict[str, object] | None = None
     schema_version: int = TASK_SCHEMA_VERSION
+    revision: int = 0
 
     @classmethod
     def create(cls, intent: str, request: dict[str, object]) -> "ProductTask":
@@ -77,10 +84,11 @@ class ProductTask:
             approvals=list(payload.get("approvals", [])),  # type: ignore[arg-type]
             artifacts=dict(payload.get("artifacts", {})),  # type: ignore[arg-type]
             writing_run_id=str(payload["writing_run_id"]) if payload.get("writing_run_id") else None,
-            wechat=dict(payload.get("wechat", {})),  # type: ignore[arg-type]
+            wechat=_wechat_state(payload.get("wechat", {})),
             metrics=dict(payload.get("metrics", {})),  # type: ignore[arg-type]
             error=dict(payload["error"]) if isinstance(payload.get("error"), dict) else None,
-            schema_version=int(payload.get("schema_version", TASK_SCHEMA_VERSION)),
+            schema_version=TASK_SCHEMA_VERSION,
+            revision=int(payload.get("revision", 0)),
         )
 
     def transition(self, status: str, active_stage: str, *, error: dict[str, object] | None = None) -> None:
@@ -107,7 +115,17 @@ class ProductTask:
         self.metrics["updated_at"] = _now()
 
     def latest_approval(self, gate: str) -> dict[str, object] | None:
-        return next((item for item in reversed(self.approvals) if item.get("gate") == gate), None)
+        return next(
+            (item for item in reversed(self.approvals) if item.get("gate") == gate and not item.get("invalidated_at")),
+            None,
+        )
+
+    def invalidate_approval(self, gate: str, reason: str) -> None:
+        approval = self.latest_approval(gate)
+        if approval:
+            approval["invalidated_at"] = _now()
+            approval["invalidation_reason"] = reason
+            self.metrics["updated_at"] = _now()
 
     def to_dict(self) -> dict[str, object]:
         return asdict(self)
@@ -119,7 +137,19 @@ class ProductTaskRepository:
 
     def save(self, task: ProductTask) -> Path:
         path = self.path(task.task_id)
-        write_json(path, task.to_dict())
+        current = read_json(path, {})
+        current_revision = int(current.get("revision", 0)) if isinstance(current, dict) else 0
+        if current and current_revision != task.revision:
+            raise RuntimeError(
+                f"Task revision conflict for {task.task_id}: expected {task.revision}, found {current_revision}"
+            )
+        previous_revision = task.revision
+        task.revision += 1
+        try:
+            write_json(path, task.to_dict())
+        except Exception:
+            task.revision = previous_revision
+            raise
         self._update_index()
         return path
 
@@ -142,6 +172,7 @@ class ProductTaskRepository:
                     "status": payload.get("status"),
                     "active_stage": payload.get("active_stage"),
                     "updated_at": dict(payload.get("metrics", {})).get("updated_at"),
+                    "revision": payload.get("revision", 0),
                 }
             )
         return rows
@@ -151,3 +182,16 @@ class ProductTaskRepository:
 
     def _update_index(self) -> None:
         write_json(self.root / "index.json", self.list())
+
+
+def _wechat_state(value: object) -> dict[str, object]:
+    state = dict(value) if isinstance(value, dict) else {}
+    if "real" in state or "dry_run" in state:
+        return {
+            "real": dict(state.get("real", {})) if isinstance(state.get("real"), dict) else {"media_id": None, "publish_id": None},
+            "dry_run": dict(state.get("dry_run", {})) if isinstance(state.get("dry_run"), dict) else {},
+        }
+    return {
+        "real": {"media_id": state.get("media_id"), "publish_id": state.get("publish_id")},
+        "dry_run": {},
+    }

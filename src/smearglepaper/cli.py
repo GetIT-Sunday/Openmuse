@@ -72,6 +72,9 @@ def build_parser() -> argparse.ArgumentParser:
     task_resume.add_argument("--task-id", required=True)
     task_resume.add_argument("--real-wechat", action="store_true", help="Allow a previously approved task to create or update a real WeChat draft")
 
+    task_retry = sub.add_parser("task-retry", help="Move a failed or needs-attention task back to its recorded recovery stage")
+    task_retry.add_argument("--task-id", required=True)
+
     # --- collect-arxiv (was: collect) ---
     collect = sub.add_parser("collect-arxiv", help="Collect recent arXiv papers")
     collect.add_argument("--topic", help=f"Preset topic. Available: {', '.join(topic_names())}")
@@ -348,6 +351,10 @@ def main(argv: list[str] | None = None) -> None:
             from .product_agent import ProductAgent
 
             _print(ProductAgent().resume(args.task_id, real_wechat=args.real_wechat))
+        elif command == "task-retry":
+            from .product_agent import ProductAgent
+
+            _print(ProductAgent().retry(args.task_id))
         elif command == "collect-arxiv":
             # Handle alias with --sources flag
             sources = getattr(args, "sources", ["arxiv"])
