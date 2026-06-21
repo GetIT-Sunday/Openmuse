@@ -8,6 +8,7 @@ from .artifact_integrity import article_bundle_fingerprint
 from .candidate_selection import RANKING_PROFILES, select_candidates
 from .config import DATA_DIR
 from .models import Article, PaperMeta
+from .preview import build_preview_bundle, preview_bundle_fingerprint
 from .product_tasks import ProductTask, ProductTaskRepository
 from .storage import read_json
 from .workflow import SmearglePaperWorkflow
@@ -35,6 +36,7 @@ class ProductAgent:
         ranking_profile: str = "balanced",
         days: int = 30,
         candidate_count: int = 3,
+        auto_prepare_assets: bool = True,
     ) -> dict[str, object]:
         if ranking_profile not in RANKING_PROFILES:
             raise ValueError(f"Unknown ranking profile: {ranking_profile}")
@@ -51,6 +53,7 @@ class ProductAgent:
                 "ranking_profile": ranking_profile,
                 "days": days,
                 "candidate_count": candidate_count,
+                "auto_prepare_assets": auto_prepare_assets,
             },
         )
         task.transition("planning", "task-planner")
@@ -73,6 +76,8 @@ class ProductAgent:
                 return self._run_writing(task)
             if task.status == "reviewing":
                 return self._review_existing_article(task)
+            if task.status == "preparing_assets":
+                return self._prepare_assets(task)
             if task.status == "discovering":
                 return self._discover(task)
             if task.status == "creating_draft":
@@ -111,10 +116,22 @@ class ProductAgent:
             task.approve(gate, detail={"paper_id": selected["paper_id"]})
             task.transition("researching", "paper-research")
         else:
+            if task.status != "awaiting_publish_approval":
+                raise ValueError("Task is not waiting for publish approval.")
             if not artifact:
                 raise ValueError("Publish approval requires a final article artifact.")
             fingerprint = article_bundle_fingerprint(Path(artifact))
-            task.approve(gate, artifact=artifact, detail={"fingerprint": fingerprint})
+            preview_manifest = Path(str(task.artifacts.get("preview_manifest", "")))
+            if not preview_manifest.exists():
+                raise ValueError("Publish approval requires a generated preview.")
+            task.approve(
+                gate,
+                artifact=artifact,
+                detail={
+                    "fingerprint": fingerprint,
+                    "preview_fingerprint": preview_bundle_fingerprint(preview_manifest),
+                },
+            )
             task.transition("creating_draft", "create-wechat-draft")
         manifest = self.repository.save(task)
         return self._result(task, manifest)
@@ -181,22 +198,8 @@ class ProductAgent:
         task.artifacts["content_ready"] = bool(final.get("content_ready"))
         task.artifacts["publish_ready"] = bool(final.get("publish_ready"))
         task.transition("reviewing", "quality-gate")
-        if final.get("publish_ready"):
-            task.artifacts["article_fingerprint"] = article_bundle_fingerprint(Path(str(final.get("article_json"))))
-            task.transition("awaiting_publish_approval", "publish-approval")
-        else:
-            task.transition(
-                "needs_attention",
-                "quality-gate",
-                error={
-                    "type": "QualityGate",
-                    "message": "Article is not publish_ready.",
-                    "recovery_status": "reviewing",
-                    "recovery_stage": "quality-gate",
-                },
-            )
-        manifest = self.repository.save(task)
-        return self._result(task, manifest)
+        self.repository.save(task)
+        return self._advance_after_review(task)
 
     def _create_or_update_draft(self, task: ProductTask, *, real_wechat: bool) -> dict[str, object]:
         approval = task.latest_approval("publish")
@@ -206,8 +209,11 @@ class ProductAgent:
         if not article_json.exists():
             raise RuntimeError(f"Approved article artifact not found: {article_json}")
         approved_fingerprint = dict(approval.get("detail", {})).get("fingerprint")
+        approved_preview_fingerprint = dict(approval.get("detail", {})).get("preview_fingerprint")
         current_fingerprint = article_bundle_fingerprint(article_json)
-        if approved_fingerprint != current_fingerprint:
+        preview_manifest = Path(str(task.artifacts.get("preview_manifest", "")))
+        current_preview_fingerprint = preview_bundle_fingerprint(preview_manifest) if preview_manifest.exists() else None
+        if approved_fingerprint != current_fingerprint or approved_preview_fingerprint != current_preview_fingerprint:
             task.invalidate_approval("publish", "Approved article or asset content changed.")
             task.transition(
                 "reviewing",
@@ -255,19 +261,66 @@ class ProductAgent:
         task.artifacts["content_ready"] = content_ready
         task.artifacts["publish_ready"] = publish_ready
         task.artifacts["article_fingerprint"] = article_bundle_fingerprint(article_json)
-        if publish_ready:
-            task.transition("awaiting_publish_approval", "publish-approval")
-        else:
+        self.repository.save(task)
+        return self._advance_after_review(task)
+
+    def _advance_after_review(self, task: ProductTask) -> dict[str, object]:
+        if task.artifacts.get("publish_ready"):
+            return self._build_preview(task)
+        if task.artifacts.get("content_ready") and task.request.get("auto_prepare_assets", True):
+            task.transition("preparing_assets", "prepare-agent-assets")
+            self.repository.save(task)
+            return self._prepare_assets(task)
+        task.transition(
+            "needs_attention",
+            "quality-gate",
+            error={
+                "type": "QualityGate",
+                "message": "Article is not publish_ready.",
+                "recovery_status": "reviewing",
+                "recovery_stage": "imported-article-review",
+            },
+        )
+        manifest = self.repository.save(task)
+        return self._result(task, manifest)
+
+    def _prepare_assets(self, task: ProductTask) -> dict[str, object]:
+        article_json = Path(str(task.artifacts.get("final_article_json", "")))
+        report = self.workflow.prepare_agent_assets(
+            article_json,
+            target_score=int(task.request.get("target_score", 85)),
+        )
+        task.artifacts["asset_preparation"] = report
+        task.artifacts["content_ready"] = bool(report.get("content_ready"))
+        task.artifacts["publish_ready"] = bool(report.get("publish_ready"))
+        if report.get("article_json"):
+            task.artifacts["final_article_json"] = str(report["article_json"])
+        if not report.get("publish_ready"):
             task.transition(
                 "needs_attention",
-                "imported-article-review",
+                "prepare-agent-assets",
                 error={
-                    "type": "QualityGate",
-                    "message": "Imported article is not publish_ready.",
-                    "recovery_status": "reviewing",
-                    "recovery_stage": "imported-article-review",
+                    "type": "AssetPreparation",
+                    "message": f"Asset preparation did not produce a publish-ready article: {report.get('status')}",
+                    "recovery_status": "preparing_assets",
+                    "recovery_stage": "prepare-agent-assets",
                 },
             )
+            manifest = self.repository.save(task)
+            return self._result(task, manifest)
+        task.transition("reviewing", "post-assets-review")
+        self.repository.save(task)
+        return self._review_existing_article(task)
+
+    def _build_preview(self, task: ProductTask) -> dict[str, object]:
+        article_json = Path(str(task.artifacts.get("final_article_json", "")))
+        article = Article.from_dict(read_json(article_json, {}))
+        preview = build_preview_bundle(article, self.repository.root / task.task_id / "preview")
+        task.artifacts["article_fingerprint"] = article_bundle_fingerprint(article_json)
+        task.artifacts["preview"] = preview
+        task.artifacts["preview_manifest"] = str(preview["manifest"])
+        task.artifacts["preview_fingerprint"] = preview["fingerprint"]
+        task.transition("awaiting_publish_approval", "publish-approval")
         manifest = self.repository.save(task)
         return self._result(task, manifest)
 

@@ -9,6 +9,7 @@ from smearglepaper.candidate_selection import canonical_paper_id, select_candida
 from smearglepaper.models import Article, PaperMeta
 from smearglepaper.product_agent import ProductAgent
 from smearglepaper.product_tasks import ProductTask, ProductTaskRepository
+from smearglepaper.preview import build_preview_bundle
 from smearglepaper.storage import read_json, write_json
 
 
@@ -99,7 +100,8 @@ class ProductAgentTests(unittest.TestCase):
             }
             agent = ProductAgent(repository=repository, workflow=workflow)
             created = agent.create("解读论文", paper_id="1706.03762")
-            result = agent.resume(str(created["task_id"]))
+            with patch("smearglepaper.preview._find_browsers", return_value=[]):
+                result = agent.resume(str(created["task_id"]))
 
             self.assertEqual(result["status"], "awaiting_publish_approval")
             self.assertEqual(result["artifacts"]["final_article_json"], str(article))
@@ -146,6 +148,7 @@ class ProductAgentTests(unittest.TestCase):
             with (
                 patch("smearglepaper.product_agent.technical_review", return_value=(READY_TECHNICAL, "")),
                 patch("smearglepaper.product_agent.wechat_review", return_value=(READY_WECHAT, "")),
+                patch("smearglepaper.preview._find_browsers", return_value=[]),
             ):
                 reviewed = agent.resume(str(created["task_id"]))
             approved = agent.approve(str(created["task_id"]), "publish")
@@ -173,6 +176,7 @@ class ProductAgentTests(unittest.TestCase):
             with (
                 patch("smearglepaper.product_agent.technical_review", return_value=(READY_TECHNICAL, "")),
                 patch("smearglepaper.product_agent.wechat_review", return_value=(READY_WECHAT, "")),
+                patch("smearglepaper.preview._find_browsers", return_value=[]),
             ):
                 agent.resume(str(created["task_id"]))
             agent.approve(str(created["task_id"]), "publish")
@@ -183,6 +187,57 @@ class ProductAgentTests(unittest.TestCase):
             self.assertEqual(result["status"], "reviewing")
             workflow.publish_existing_article.assert_not_called()
             self.assertIsNone(repository.load(str(created["task_id"])).latest_approval("publish"))
+
+    def test_changed_preview_invalidates_publish_approval(self) -> None:
+        with tempfile.TemporaryDirectory() as tmp:
+            root = Path(tmp)
+            article = _write_article(root / "publish-ready.json")
+            repository = ProductTaskRepository(root / "tasks")
+            workflow = Mock()
+            agent = ProductAgent(repository=repository, workflow=workflow)
+            created = agent.create("使用现有文章", article_json=article)
+            with (
+                patch("smearglepaper.product_agent.technical_review", return_value=(READY_TECHNICAL, "")),
+                patch("smearglepaper.product_agent.wechat_review", return_value=(READY_WECHAT, "")),
+                patch("smearglepaper.preview._find_browsers", return_value=[]),
+            ):
+                agent.resume(str(created["task_id"]))
+            agent.approve(str(created["task_id"]), "publish")
+            task = repository.load(str(created["task_id"]))
+            preview = dict(task.artifacts["preview"])
+            Path(str(preview["mobile_html"])).write_text("changed preview", encoding="utf-8")
+
+            result = agent.resume(str(created["task_id"]), real_wechat=True)
+
+            self.assertEqual(result["status"], "reviewing")
+            workflow.publish_existing_article.assert_not_called()
+
+    def test_content_ready_article_automatically_prepares_assets_then_builds_preview(self) -> None:
+        with tempfile.TemporaryDirectory() as tmp:
+            root = Path(tmp)
+            local_article = _write_article(root / "local.json")
+            prepared_article = _write_article(root / "publish-ready.json")
+            repository = ProductTaskRepository(root / "tasks")
+            workflow = Mock()
+            workflow.prepare_agent_assets.return_value = {
+                "status": "publish_ready",
+                "content_ready": True,
+                "publish_ready": True,
+                "article_json": str(prepared_article),
+            }
+            blocked_wechat = {"score": 90, "revision_instructions": [], "publication_blocking_issues": ["local image"]}
+            agent = ProductAgent(repository=repository, workflow=workflow)
+            created = agent.create("使用现有文章", article_json=local_article)
+            with (
+                patch("smearglepaper.product_agent.technical_review", return_value=(READY_TECHNICAL, "")),
+                patch("smearglepaper.product_agent.wechat_review", side_effect=[(blocked_wechat, ""), (READY_WECHAT, "")]),
+                patch("smearglepaper.preview._find_browsers", return_value=[]),
+            ):
+                result = agent.resume(str(created["task_id"]))
+
+            self.assertEqual(result["status"], "awaiting_publish_approval")
+            workflow.prepare_agent_assets.assert_called_once_with(local_article, target_score=85)
+            self.assertTrue(Path(str(result["artifacts"]["preview_manifest"])).exists())
 
     def test_imported_article_must_pass_review_before_approval(self) -> None:
         with tempfile.TemporaryDirectory() as tmp:
@@ -233,6 +288,18 @@ class CandidateSelectionTests(unittest.TestCase):
 
             self.assertEqual([item["paper_id"] for item in selected], ["2606.00002v1"])
             self.assertIn("citation_count_unavailable", selected[0]["uncertainty"])
+
+
+class PreviewTests(unittest.TestCase):
+    def test_preview_bundle_uses_exact_article_html_and_mobile_width(self) -> None:
+        with tempfile.TemporaryDirectory() as tmp:
+            article = Article(_paper(), "Preview title", "digest", "# Preview", "<html><body>exact content</body></html>")
+            with patch("smearglepaper.preview._find_browsers", return_value=[]):
+                preview = build_preview_bundle(article, Path(tmp))
+
+            self.assertIn("exact content", Path(str(preview["article_html"])).read_text(encoding="utf-8"))
+            self.assertIn("390px", Path(str(preview["mobile_html"])).read_text(encoding="utf-8"))
+            self.assertTrue(Path(str(preview["manifest"])).exists())
 
 
 if __name__ == "__main__":

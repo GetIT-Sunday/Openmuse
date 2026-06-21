@@ -57,6 +57,7 @@ def build_parser() -> argparse.ArgumentParser:
     product_agent.add_argument("--ranking-profile", choices=["frontier", "classic", "engineering", "balanced"], default="balanced")
     product_agent.add_argument("--days", type=int, default=30)
     product_agent.add_argument("--candidate-count", type=int, default=3)
+    product_agent.add_argument("--no-auto-prepare-assets", action="store_true", help="Do not automatically upload local images after content review passes")
 
     sub.add_parser("tasks", help="List durable product tasks")
 
@@ -333,6 +334,7 @@ def main(argv: list[str] | None = None) -> None:
                     ranking_profile=args.ranking_profile,
                     days=args.days,
                     candidate_count=args.candidate_count,
+                    auto_prepare_assets=not args.no_auto_prepare_assets,
                 )
             )
         elif command == "tasks":

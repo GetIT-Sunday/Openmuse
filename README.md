@@ -17,6 +17,12 @@ smearglepaper task-resume --task-id <task-id> --real-wechat
 `task-resume --real-wechat` only creates or updates a draft after an explicit
 publish approval. It never formally publishes the draft.
 
+After content review passes, ProductAgent automatically prepares local images,
+re-reviews the publish-ready article, and writes exact desktop/mobile preview
+HTML under `workspace/tasks/<task-id>/preview/`. When local Chrome or Edge can
+run headlessly, desktop and mobile PNG screenshots are generated too. Publish
+approval is bound to both article and preview fingerprints.
+
 SmearglePaper turns recent AI papers into structured Chinese article drafts.
 
 It can collect arXiv papers, rank candidates, parse PDFs, extract figure candidates, generate Chinese close-reading articles, render WeChat-friendly HTML, create cover images, prepare WeChat drafts, and expose the workflow as MCP tools.

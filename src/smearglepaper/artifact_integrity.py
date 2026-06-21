@@ -15,6 +15,10 @@ def article_bundle_fingerprint(article_json: Path) -> dict[str, object]:
             if payload.get(field):
                 paths.append(Path(str(payload[field])))
         paths.extend(Path(str(item)) for item in payload.get("figure_paths", []) if item)
+    return fingerprint_paths(paths)
+
+
+def fingerprint_paths(paths: list[Path]) -> dict[str, object]:
     unique = sorted({path.resolve() for path in paths if path.exists()}, key=str)
     digest = hashlib.sha256()
     files: list[dict[str, object]] = []

@@ -20,7 +20,7 @@ ALLOWED_TRANSITIONS: dict[str, set[str]] = {
     "researching": {"writing", "needs_attention", "failed", "cancelled"},
     "writing": {"reviewing", "needs_attention", "failed", "cancelled"},
     "reviewing": {"preparing_assets", "awaiting_publish_approval", "needs_attention", "failed", "cancelled"},
-    "preparing_assets": {"awaiting_publish_approval", "needs_attention", "failed", "cancelled"},
+    "preparing_assets": {"reviewing", "awaiting_publish_approval", "needs_attention", "failed", "cancelled"},
     "awaiting_publish_approval": {"creating_draft", "reviewing", "cancelled"},
     "creating_draft": {"reviewing", "draft_simulated", "draft_created", "needs_attention", "failed"},
     "draft_simulated": {"creating_draft", "cancelled"},

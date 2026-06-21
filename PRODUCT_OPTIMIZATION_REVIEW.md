@@ -21,7 +21,14 @@ Still pending:
 
 - true stage-level resume inside `PaperWritingAgent`
 - crash-safe WeChat operation journal
-- automatic asset preparation and preview bundle
+
+Iteration B has now been implemented locally:
+
+- automatic `preparing_assets` stage after content review
+- post-upload re-review before publish approval
+- exact final HTML desktop/mobile preview bundle
+- optional Chrome/Edge headless preview screenshots
+- publish approval bound to both article and preview fingerprints
 
 ## 1. Executive Decision
 
