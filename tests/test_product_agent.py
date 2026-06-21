@@ -10,6 +10,7 @@ from smearglepaper.models import Article, PaperMeta
 from smearglepaper.product_agent import ProductAgent
 from smearglepaper.product_tasks import ProductTask, ProductTaskRepository
 from smearglepaper.preview import build_preview_bundle
+from smearglepaper.preview_server import build_readiness, render_check_page, render_preview_page
 from smearglepaper.storage import read_json, write_json
 
 
@@ -300,6 +301,74 @@ class PreviewTests(unittest.TestCase):
             self.assertIn("exact content", Path(str(preview["article_html"])).read_text(encoding="utf-8"))
             self.assertIn("390px", Path(str(preview["mobile_html"])).read_text(encoding="utf-8"))
             self.assertTrue(Path(str(preview["manifest"])).exists())
+
+    def test_readiness_marks_publish_approval_ready_for_mobile_workbench(self) -> None:
+        with tempfile.TemporaryDirectory() as tmp:
+            root = Path(tmp)
+            article_path = _write_article(root / "publish-ready.json")
+            repository = ProductTaskRepository(root / "tasks")
+            task = ProductTask.create("explain_paper", {})
+            task.transition("planning", "task-planner")
+            task.transition("reviewing", "quality-gate")
+            task.artifacts["final_article_json"] = str(article_path)
+            task.artifacts["content_ready"] = True
+            task.artifacts["publish_ready"] = True
+            task.artifacts["technical_review"] = READY_TECHNICAL
+            task.artifacts["wechat_review"] = READY_WECHAT
+            with patch("smearglepaper.preview._find_browsers", return_value=[]):
+                preview = build_preview_bundle(Article.from_dict(read_json(article_path, {})), root / "preview")
+            task.artifacts["preview_manifest"] = str(preview["manifest"])
+            task.artifacts["preview_fingerprint"] = preview["fingerprint"]
+            from smearglepaper.artifact_integrity import article_bundle_fingerprint
+
+            task.artifacts["article_fingerprint"] = article_bundle_fingerprint(article_path)
+            task.transition("awaiting_publish_approval", "publish-approval")
+            repository.save(task)
+
+            readiness = build_readiness(repository.load(task.task_id))
+            check = render_check_page(repository.load(task.task_id), readiness)
+            preview_page = render_preview_page(repository.load(task.task_id), readiness)
+
+            self.assertEqual(readiness["result"]["state"], "ready")
+            self.assertTrue(readiness["result"]["can_approve_publish"])
+            self.assertIn("可以创建公众号草稿", check)
+            self.assertIn("backdrop-filter", check)
+            self.assertIn("article-frame", preview_page)
+
+    def test_readiness_blocks_local_images_before_publish(self) -> None:
+        with tempfile.TemporaryDirectory() as tmp:
+            root = Path(tmp)
+            article = Article(
+                _paper(),
+                "Preview title",
+                "digest",
+                "# Preview",
+                '<p>exact content</p><img src="C:/tmp/local.png">',
+                figure_paths=["C:/tmp/local.png"],
+            )
+            article_path = root / "local-image.json"
+            write_json(article_path, article.to_dict())
+            task = ProductTask.create("explain_paper", {})
+            task.transition("planning", "task-planner")
+            task.transition("reviewing", "quality-gate")
+            task.artifacts["final_article_json"] = str(article_path)
+            task.artifacts["content_ready"] = True
+            task.artifacts["publish_ready"] = True
+            task.artifacts["technical_review"] = READY_TECHNICAL
+            task.artifacts["wechat_review"] = READY_WECHAT
+            with patch("smearglepaper.preview._find_browsers", return_value=[]):
+                preview = build_preview_bundle(article, root / "preview")
+            task.artifacts["preview_manifest"] = str(preview["manifest"])
+            task.artifacts["preview_fingerprint"] = preview["fingerprint"]
+            from smearglepaper.artifact_integrity import article_bundle_fingerprint
+
+            task.artifacts["article_fingerprint"] = article_bundle_fingerprint(article_path)
+            task.transition("awaiting_publish_approval", "publish-approval")
+
+            readiness = build_readiness(task)
+
+            self.assertEqual(readiness["result"]["state"], "needs_attention")
+            self.assertEqual(len(readiness["images"]["local_sources"]), 1)
 
 
 if __name__ == "__main__":

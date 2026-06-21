@@ -76,6 +76,16 @@ def build_parser() -> argparse.ArgumentParser:
     task_retry = sub.add_parser("task-retry", help="Move a failed or needs-attention task back to its recorded recovery stage")
     task_retry.add_argument("--task-id", required=True)
 
+    task_preview = sub.add_parser("task-preview", help="Serve the mobile preview and publish-readiness checklist for a task")
+    task_preview.add_argument("--task-id", required=True)
+    task_preview.add_argument("--host", default="0.0.0.0")
+    task_preview.add_argument("--port", type=int, default=8765)
+
+    agent_preview = sub.add_parser("agent-preview", help="Serve the mobile task preview")
+    agent_preview.add_argument("--task-id", required=True)
+    agent_preview.add_argument("--host", default="0.0.0.0")
+    agent_preview.add_argument("--port", type=int, default=8765)
+
     # --- collect-arxiv (was: collect) ---
     collect = sub.add_parser("collect-arxiv", help="Collect recent arXiv papers")
     collect.add_argument("--topic", help=f"Preset topic. Available: {', '.join(topic_names())}")
@@ -357,6 +367,20 @@ def main(argv: list[str] | None = None) -> None:
             from .product_agent import ProductAgent
 
             _print(ProductAgent().retry(args.task_id))
+        elif command in {"task-preview", "agent-preview"}:
+            from .preview_server import preview_urls, serve_task_preview
+
+            def _ready(payload: dict[str, object]) -> None:
+                _print(
+                    {
+                        "task_id": args.task_id,
+                        "local": payload.get("local") or preview_urls(args.task_id, host=args.host, port=args.port),
+                        "lan": payload.get("lan"),
+                        "message": "Preview server is running. Press Ctrl+C to stop.",
+                    }
+                )
+
+            serve_task_preview(args.task_id, host=args.host, port=args.port, ready_callback=_ready)
         elif command == "collect-arxiv":
             # Handle alias with --sources flag
             sources = getattr(args, "sources", ["arxiv"])

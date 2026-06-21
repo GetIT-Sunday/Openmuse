@@ -23,6 +23,25 @@ HTML under `workspace/tasks/<task-id>/preview/`. When local Chrome or Edge can
 run headlessly, desktop and mobile PNG screenshots are generated too. Publish
 approval is bound to both article and preview fingerprints.
 
+Mobile-first preview:
+
+```bash
+smearglepaper task-preview --task-id <task-id>
+```
+
+The command starts a local Apple-style review workbench with:
+
+- `/tasks/<task-id>/preview` for the phone-width article preview.
+- `/tasks/<task-id>/check` for the publish-readiness checklist.
+- `/api/tasks/<task-id>/readiness` for structured status JSON.
+
+The preview service is read-only. After checking the phone preview, approve
+publishing from the CLI:
+
+```bash
+smearglepaper task-approve --task-id <task-id> --gate publish
+```
+
 SmearglePaper turns recent AI papers into structured Chinese article drafts.
 
 It can collect arXiv papers, rank candidates, parse PDFs, extract figure candidates, generate Chinese close-reading articles, render WeChat-friendly HTML, create cover images, prepare WeChat drafts, and expose the workflow as MCP tools.

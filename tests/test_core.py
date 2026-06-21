@@ -290,6 +290,8 @@ class CoreTests(unittest.TestCase):
         approved = build_parser().parse_args(["task-approve", "--task-id", "task-1", "--gate", "publish"])
         resumed = build_parser().parse_args(["task-resume", "--task-id", "task-1", "--real-wechat"])
         retried = build_parser().parse_args(["task-retry", "--task-id", "task-1"])
+        previewed = build_parser().parse_args(["task-preview", "--task-id", "task-1", "--port", "9000"])
+        preview_alias = build_parser().parse_args(["agent-preview", "--task-id", "task-1"])
 
         self.assertEqual(created.command, "agent")
         self.assertEqual(created.paper_id, "1706.03762")
@@ -297,6 +299,9 @@ class CoreTests(unittest.TestCase):
         self.assertEqual(approved.gate, "publish")
         self.assertTrue(resumed.real_wechat)
         self.assertEqual(retried.task_id, "task-1")
+        self.assertEqual(previewed.command, "task-preview")
+        self.assertEqual(previewed.port, 9000)
+        self.assertEqual(preview_alias.command, "agent-preview")
 
     def test_writing_agent_parser_defaults(self) -> None:
         args = build_parser().parse_args(["writing-agent", "--paper-id", "1706.03762"])
