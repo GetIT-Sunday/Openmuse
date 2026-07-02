@@ -5,7 +5,7 @@
   </p>
   <p align="center">
     <a href="#-features">功能</a> • 
-    <a href="#-installation">安装</a> • 
+    <a href="#-install">安装</a> • 
     <a href="#-quick-start">快速开始</a> • 
     <a href="#-cli-commands">CLI 命令</a> • 
     <a href="#-mcp-server">MCP 服务</a>
@@ -25,7 +25,7 @@
 
 ## ✨ 功能特性
 
-SmearglePaper 将最新的 AI 论文转化为结构化的中文文章草稿。灵感来自宝可梦"图图犬"（Smeargle），该项目将论文"绘制"成可读的技术文章。
+SmearglePaper 将最新的 AI 论文转化为结构化的中文文章草稿。灵感来自宝可梦"图图图犬"（Smeargle），该项目将论文"绘制"成可读的技术文章。
 
 <table>
   <tr>
@@ -34,7 +34,6 @@ SmearglePaper 将最新的 AI 论文转化为结构化的中文文章草稿。�
       <ul>
         <li>从 arXiv 收集最新论文</li>
         <li>从 AI 工程 RSS/Atom 订阅源收集博客</li>
-        <li>从 GitHub Trending 收集热门项目</li>
         <li>按主题相关性、新鲜度和 AI 类别信号排序</li>
       </ul>
     </td>
@@ -44,7 +43,6 @@ SmearglePaper 将最新的 AI 论文转化为结构化的中文文章草稿。�
         <li>使用 PyMuPDF 下载解析 PDF</li>
         <li>提取图表候选</li>
         <li>用 LLM 生成中文深度解读文章</li>
-        <li>支持 DeepSeek/OpenAI 兼容 API</li>
       </ul>
     </td>
   </tr>
@@ -55,7 +53,6 @@ SmearglePaper 将最新的 AI 论文转化为结构化的中文文章草稿。�
         <li>文章质量评分</li>
         <li>LLM 编辑优化</li>
         <li>本地模板兜底</li>
-        <li>Evidence-first 写作流程</li>
       </ul>
     </td>
     <td width="50%">
@@ -64,7 +61,6 @@ SmearglePaper 将最新的 AI 论文转化为结构化的中文文章草稿。�
         <li>生成微信公众号兼容 HTML</li>
         <li>创建封面图</li>
         <li>创建/更新微信草稿</li>
-        <li>MCP 工具支持</li>
       </ul>
     </td>
   </tr>
@@ -269,14 +265,6 @@ MIT License - 详见 [LICENSE](LICENSE)
 
 ---
 
-## 🙏 致谢
-
-- [arXiv](https://arxiv.org/) — 论文来源
-- [DeepSeek](https://api.deepseek.com/) — LLM API
-- [WeChat Official Account API](https://developers.weixin.qq.com/) — 微信公众号接口
-
----
-
 <p align="center">
   <strong>⭐ 如果这个项目对你有帮助，请给个 Star 支持一下！</strong>
 </p>
@@ -285,10 +273,4 @@ MIT License - 详见 [LICENSE](LICENSE)
   <a href="https://star-history.com/#GetIT-Sunday/SmearglePaper&Date">
     <img src="https://api.star-history.com/svg?repos=GetIT-Sunday/SmearglePaper&type=Date" alt="Star History Chart" width="600">
   </a>
-</p>
-
----
-
-<p align="center">
-  <sub>Made with ✨ by <a href="https://github.com/GetIT-Sunday">GetIT-Sunday</a> using <a href="https://github.com/GetIT-Sunday/ReadmeMagic-github-readme-design-skill">ReadmeMagic</a></sub>
 </p>

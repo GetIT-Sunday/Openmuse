@@ -1,0 +1,170 @@
+﻿<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>SmearglePaper - README Preview</title>
+    <style>
+        * { margin: 0; padding: 0; box-sizing: border-box; }
+        body {
+            font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, sans-serif;
+            line-height: 1.6;
+            background: #0f0f23;
+            color: #e0e0e0;
+        }
+        .hero {
+            text-align: center;
+            padding: 80px 20px;
+            background: radial-gradient(ellipse at center, #1a1a3e 0%, #0f0f23 70%);
+        }
+        .hero h1 {
+            font-size: 3em;
+            background: linear-gradient(135deg, #667eea 0%, #a855f7 50%, #ec4899 100%);
+            -webkit-background-clip: text;
+            -webkit-text-fill-color: transparent;
+            background-clip: text;
+            margin-bottom: 15px;
+        }
+        .hero .tagline { color: #a0a0c0; font-size: 1.3em; margin-bottom: 30px; }
+        .badges { display: flex; gap: 10px; justify-content: center; flex-wrap: wrap; margin: 20px 0; }
+        .badges img { height: 22px; }
+        .nav { display: flex; gap: 20px; justify-content: center; margin-top: 20px; }
+        .nav a { color: #667eea; text-decoration: none; }
+        .nav a:hover { text-decoration: underline; }
+        .container { max-width: 1000px; margin: 0 auto; padding: 60px 20px; }
+        .section { margin-bottom: 60px; }
+        .section h2 { font-size: 1.8em; color: #667eea; margin-bottom: 25px; }
+        .feature-table { width: 100%; border-collapse: collapse; }
+        .feature-table td { width: 50%; padding: 25px; background: #1a1a3e; vertical-align: top; }
+        .feature-table td h3 { color: #a855f7; margin-bottom: 12px; }
+        .feature-table ul { list-style: none; }
+        .feature-table li { padding: 6px 0; }
+        .feature-table li:before { content: "✓"; color: #22c55e; margin-right: 10px; }
+        .code-block {
+            background: #0d0d1a;
+            padding: 20px;
+            border-radius: 10px;
+            font-family: 'Monaco', monospace;
+            font-size: 0.9em;
+            line-height: 1.8;
+            overflow-x: auto;
+            margin: 15px 0;
+        }
+        .code-block .comment { color: #6a9955; }
+        .command-table { width: 100%; border-collapse: collapse; }
+        .command-table th, .command-table td { padding: 12px; text-align: left; border-bottom: 1px solid #2a2a5a; }
+        .command-table th { background: #667eea; color: white; }
+        .command-table tr:hover { background: #1a1a3e; }
+        .star-history { text-align: center; margin-top: 60px; padding: 40px; background: #1a1a3e; border-radius: 15px; }
+        .star-history img { max-width: 600px; width: 100%; }
+        footer { text-align: center; padding: 30px; color: #666; border-top: 1px solid #1a1a3e; }
+        footer a { color: #667eea; text-decoration: none; }
+    </style>
+</head>
+<body>
+    <div class="hero">
+        <h1>🎨 SmearglePaper</h1>
+        <p class="tagline">AI 论文自动化写作与发布助手</p>
+        <div class="badges">
+            <img src="https://img.shields.io/badge/version-0.1.0-blue?style=flat-square" alt="Version">
+            <img src="https://img.shields.io/badge/license-MIT-green?style=flat-square" alt="License">
+            <img src="https://img.shields.io/badge/python-3.10+-yellow?style=flat-square" alt="Python">
+            <img src="https://img.shields.io/badge/arXiv-papers-orange?style=flat-square" alt="arXiv">
+            <img src="https://img.shields.io/badge/WeChat-公众号-blue?style=flat-square" alt="WeChat">
+            <img src="https://img.shields.io/github/stars/GetIT-Sunday/SmearglePaper?style=social" alt="Stars">
+        </div>
+        <div class="nav">
+            <a href="#features">功能</a>
+            <a href="#install">安装</a>
+            <a href="#quick-start">快速开始</a>
+            <a href="#cli">CLI 命令</a>
+            <a href="#mcp">MCP 服务</a>
+        </div>
+    </div>
+
+    <div class="container">
+        <div class="section" id="features">
+            <h2>✨ 功能特性</h2>
+            <table class="feature-table">
+                <tr>
+                    <td>
+                        <h3>📄 论文收集</h3>
+                        <ul>
+                            <li>从 arXiv 收集最新论文</li>
+                            <li>从 AI 工程 RSS/Atom 订阅源收集博客</li>
+                            <li>从 GitHub Trending 收集热门项目</li>
+                            <li>按主题相关性、新鲜度排序</li>
+                        </ul>
+                    </td>
+                    <td>
+                        <h3>📝 文章生成</h3>
+                        <ul>
+                            <li>使用 PyMuPDF 下载解析 PDF</li>
+                            <li>提取图表候选</li>
+                            <li>用 LLM 生成中文深度解读文章</li>
+                            <li>支持 DeepSeek/OpenAI 兼容 API</li>
+                        </ul>
+                    </td>
+                </tr>
+                <tr>
+                    <td>
+                        <h3>🔍 质量审查</h3>
+                        <ul>
+                            <li>文章质量评分</li>
+                            <li>LLM 编辑优化</li>
+                            <li>本地模板兜底</li>
+                            <li>Evidence-first 写作流程</li>
+                        </ul>
+                    </td>
+                    <td>
+                        <h3>📱 微信发布</h3>
+                        <ul>
+                            <li>生成微信公众号兼容 HTML</li>
+                            <li>创建封面图</li>
+                            <li>创建/更新微信草稿</li>
+                            <li>MCP 工具支持</li>
+                        </ul>
+                    </td>
+                </tr>
+            </table>
+        </div>
+
+        <div class="section" id="quick-start">
+            <h2>🚀 快速开始</h2>
+            <h3>一键运行完整流水线</h3>
+            <div class="code-block">
+                smearglepaper agent-run --topic agents --days 30 --top-k 5
+            </div>
+        </div>
+
+        <div class="section" id="cli">
+            <h2>🛠️ CLI 命令</h2>
+            <table class="command-table">
+                <thead><tr><th>命令</th><th>说明</th></tr></thead>
+                <tbody>
+                    <tr><td><code>smearglepaper topics</code></td><td>列出可用主题预设</td></tr>
+                    <tr><td><code>smearglepaper collect</code></td><td>收集 arXiv 论文</td></tr>
+                    <tr><td><code>smearglepaper collect-blogs</code></td><td>收集 AI 博客</td></tr>
+                    <tr><td><code>smearglepaper collect-github</code></td><td>收集 GitHub Trending</td></tr>
+                    <tr><td><code>smearglepaper rank</code></td><td>排序论文</td></tr>
+                    <tr><td><code>smearglepaper write</code></td><td>生成文章</td></tr>
+                    <tr><td><code>smearglepaper agent-run</code></td><td>运行完整流水线</td></tr>
+                    <tr><td><code>smearglepaper daily-digest</code></td><td>每日摘要</td></tr>
+                </tbody>
+            </table>
+        </div>
+    </div>
+
+    <div class="star-history">
+        <h2>⭐ Star History</h2>
+        <p style="margin: 15px 0; color: #888;">如果这个项目对你有帮助，请给个 Star 支持一下！</p>
+        <a href="https://star-history.com/#GetIT-Sunday/SmearglePaper&Date">
+            <img src="https://api.star-history.com/svg?repos=GetIT-Sunday/SmearglePaper&type=Date" alt="Star History Chart">
+        </a>
+    </div>
+
+    <footer>
+        <p>Made with ✨ by <a href="https://github.com/GetIT-Sunday">GetIT-Sunday</a> using <a href="https://github.com/GetIT-Sunday/ReadmeMagic-github-readme-design-skill">ReadmeMagic</a></p>
+    </footer>
+</body>
+</html>
