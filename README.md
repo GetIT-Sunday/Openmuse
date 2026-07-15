@@ -1,14 +1,21 @@
-﻿<p align="center">
+<a name="smearglepaper"></a>
+<p align="center">
+  <img src="assets/banner.png" alt="SmearglePaper banner" width="100%">
+</p>
+
+<p align="center">
   <h1 align="center">🎨 SmearglePaper</h1>
   <p align="center">
-    <strong>AI 论文自动化写作与发布助手</strong>
+    <strong>AI 论文自动化写作与发布助手</strong><br>
+    <em>Automated AI Paper Writing & Publishing Assistant</em>
   </p>
   <p align="center">
-    <a href="#-features">功能</a> • 
-    <a href="#-installation">安装</a> • 
-    <a href="#-quick-start">快速开始</a> • 
-    <a href="#-cli-commands">CLI 命令</a> • 
-    <a href="#-mcp-server">MCP 服务</a>
+    <a href="#-功能特性">功能特性</a> •
+    <a href="#-快速开始">快速开始</a> •
+    <a href="#-安装">安装</a> •
+    <a href="#%EF%B8%8F-cli-命令">CLI 命令</a> •
+    <a href="#-mcp-服务">MCP 服务</a> •
+    <a href="#%EF%B8%8F-配置">配置</a>
   </p>
 </p>
 
@@ -17,15 +24,19 @@
   <img src="https://img.shields.io/badge/license-MIT-green?style=flat-square" alt="License">
   <img src="https://img.shields.io/badge/python-3.10+-yellow?style=flat-square" alt="Python">
   <img src="https://img.shields.io/badge/arXiv-papers-orange?style=flat-square" alt="arXiv">
-  <img src="https://img.shields.io/badge/WeChat-公众号-blue?style=flat-square" alt="WeChat">
+  <img src="https://img.shields.io/badge/WeChat-公众号-07C160?style=flat-square" alt="WeChat">
   <img src="https://img.shields.io/github/stars/GetIT-Sunday/SmearglePaper?style=social" alt="Stars">
+</p>
+
+<p align="center">
+  <strong>中文</strong> | <a href="README_EN.md">English</a>
 </p>
 
 ---
 
 ## ✨ 功能特性
 
-SmearglePaper 将最新的 AI 论文转化为结构化的中文文章草稿。灵感来自宝可梦"图图犬"（Smeargle），该项目将论文"绘制"成可读的技术文章。
+SmearglePaper 将最新 AI 论文转化为结构化的中文技术文章草稿。灵感来自宝可梦「图图犬」（Smeargle）——将论文"绘制"成可读的深度解读。
 
 <table>
   <tr>
@@ -44,7 +55,7 @@ SmearglePaper 将最新的 AI 论文转化为结构化的中文文章草稿。�
         <li>使用 PyMuPDF 下载解析 PDF</li>
         <li>提取图表候选</li>
         <li>用 LLM 生成中文深度解读文章</li>
-        <li>支持 DeepSeek/OpenAI 兼容 API</li>
+        <li>支持 DeepSeek / OpenAI 兼容 API</li>
       </ul>
     </td>
   </tr>
@@ -54,7 +65,7 @@ SmearglePaper 将最新的 AI 论文转化为结构化的中文文章草稿。�
       <ul>
         <li>文章质量评分</li>
         <li>LLM 编辑优化</li>
-        <li>本地模板兜底</li>
+        <li>本地模板兜底（离线可用）</li>
         <li>Evidence-first 写作流程</li>
       </ul>
     </td>
@@ -62,155 +73,158 @@ SmearglePaper 将最新的 AI 论文转化为结构化的中文文章草稿。�
       <h3>📱 微信发布</h3>
       <ul>
         <li>生成微信公众号兼容 HTML</li>
-        <li>创建封面图</li>
-        <li>创建/更新微信草稿</li>
-        <li>MCP 工具支持</li>
+        <li>自动创建封面图</li>
+        <li>创建 / 更新微信草稿</li>
+        <li>MCP 工具支持，可与 AI Agent 集成</li>
       </ul>
     </td>
   </tr>
 </table>
 
+<div align="right"><a href="#smearglepaper">↑ 返回顶部</a></div>
+
 ---
 
 ## 🚀 快速开始
 
-### 一键运行完整流水线
+**① 一键运行完整流水线**
 
 ```bash
 smearglepaper agent-run --topic agents --days 30 --top-k 5
 ```
 
-### 分步运行
+**② 分步运行**
 
 ```bash
-# 1. 检查环境
-smearglepaper preflight
-
-# 2. 收集论文
-smearglepaper collect --topic agents --days 30 --max-results 50
-
-# 3. 排序论文
-smearglepaper rank --top-k 5
-
-# 4. 生成文章
-smearglepaper write --paper-id 2401.00001
-
-# 5. 审查文章
-smearglepaper review-article data/articles/2401.00001.md
-
-# 6. 优化文章
-smearglepaper improve-article data/articles/2401.00001.json
+smearglepaper preflight                                          # 检查环境
+smearglepaper collect --topic agents --days 30 --max-results 50 # 收集论文
+smearglepaper rank --top-k 5                                     # 排序论文
+smearglepaper write --paper-id 2401.00001                        # 生成文章
+smearglepaper review-article data/articles/2401.00001.md         # 审查文章
+smearglepaper improve-article data/articles/2401.00001.json      # 优化文章
 ```
 
-### 论文深度解读 Agent
+**③ 论文深度解读 Agent**
 
 ```bash
 smearglepaper agent "解读这篇论文" --paper-url https://arxiv.org/abs/1706.03762
 ```
 
+<div align="right"><a href="#smearglepaper">↑ 返回顶部</a></div>
+
 ---
 
 ## 📦 安装
 
-### Conda（推荐）
+> **前置条件**：Python 3.10+，推荐使用 Conda
+
+**Conda（推荐）**
 
 ```bash
-# 创建环境
 conda env create -p ./.conda/envs/smearglepaper -f environment.yml
-
-# 安装包
 conda run -p ./.conda/envs/smearglepaper python -m pip install -e ".[dev]"
 ```
 
-### Pip
+<details>
+<summary><strong>📋 Pip 安装方式 — 点击展开</strong></summary>
+<br>
 
 ```bash
 python -m venv .venv
-source .venv/bin/activate  # Windows: .venv\Scripts\activate
+source .venv/bin/activate   # Windows: .venv\Scripts\activate
 python -m pip install -e ".[dev]"
 ```
 
-### 验证安装
+</details>
 
 ```bash
+# 验证安装
 smearglepaper preflight
 ```
+
+<div align="right"><a href="#smearglepaper">↑ 返回顶部</a></div>
 
 ---
 
 ## 🛠️ CLI 命令
 
-| 命令 | 说明 |
-|------|------|
-| `smearglepaper topics` | 列出可用主题预设 |
-| `smearglepaper collect` | 收集 arXiv 论文 |
-| `smearglepaper collect-blogs` | 收集 AI 博客 |
-| `smearglepaper collect-github` | 收集 GitHub Trending |
-| `smearglepaper rank` | 排序论文 |
-| `smearglepaper read` | 读取论文 |
-| `smearglepaper write` | 生成文章 |
-| `smearglepaper review-article` | 审查文章 |
-| `smearglepaper improve-article` | 优化文章 |
-| `smearglepaper draft` | 生成草稿 |
-| `smearglepaper agent-run` | 运行完整流水线 |
-| `smearglepaper daily-digest` | 每日摘要 |
-| `smearglepaper trend-analysis` | 趋势分析 |
+<table>
+<tr><th>命令</th><th>说明</th></tr>
+<tr><td><code>smearglepaper topics</code></td><td>列出可用主题预设</td></tr>
+<tr><td><code>smearglepaper collect</code></td><td>收集 arXiv 论文</td></tr>
+<tr><td><code>smearglepaper collect-blogs</code></td><td>收集 AI 博客</td></tr>
+<tr><td><code>smearglepaper collect-github</code></td><td>收集 GitHub Trending</td></tr>
+<tr><td><code>smearglepaper rank</code></td><td>排序论文</td></tr>
+<tr><td><code>smearglepaper read</code></td><td>读取论文</td></tr>
+<tr><td><code>smearglepaper write</code></td><td>生成文章</td></tr>
+<tr><td><code>smearglepaper review-article</code></td><td>审查文章质量</td></tr>
+<tr><td><code>smearglepaper improve-article</code></td><td>优化文章</td></tr>
+<tr><td><code>smearglepaper draft</code></td><td>生成微信草稿</td></tr>
+<tr><td><code>smearglepaper agent-run</code></td><td>运行完整自动化流水线</td></tr>
+<tr><td><code>smearglepaper daily-digest</code></td><td>每日摘要</td></tr>
+<tr><td><code>smearglepaper trend-analysis</code></td><td>趋势分析</td></tr>
+</table>
 
-### 主题预设
+**主题预设**：`latest_ai` · `agents` · `nlp` · `nlp_semantics` · `nlp_syntax` · `nlp_pragmatics`
 
-- `latest_ai` — cs.AI, cs.CL, cs.LG, cs.CV
-- `agents` — LLM Agent, 多 Agent, 工具使用
-- `nlp` — cs.CL
-- `nlp_semantics`, `nlp_syntax`, `nlp_pragmatics`
+<div align="right"><a href="#smearglepaper">↑ 返回顶部</a></div>
 
 ---
 
 ## 🔧 MCP 服务
 
-SmearglePaper 可作为 MCP 服务器运行，支持与 AI Agent 集成。
+SmearglePaper 可作为 MCP 服务器运行，与 AI Agent 无缝集成：
 
 ```bash
 python -m mcp_server.server
 ```
 
-### 可用 MCP 工具
+<details>
+<summary><strong>📋 可用 MCP 工具列表 — 点击展开</strong></summary>
+<br>
 
-- `collect_papers` — 收集论文
-- `collect_blogs` — 收集博客
-- `rank_latest` — 排序论文
-- `read_paper` — 读取论文
-- `write_article` — 生成文章
-- `review_article` — 审查文章
-- `improve_article` — 优化文章
-- `create_draft` — 创建微信草稿
-- `publish_article` — 发布文章
+| 工具 | 说明 |
+|------|------|
+| `collect_papers` | 收集论文 |
+| `collect_blogs` | 收集博客 |
+| `rank_latest` | 排序论文 |
+| `read_paper` | 读取论文 |
+| `write_article` | 生成文章 |
+| `review_article` | 审查文章 |
+| `improve_article` | 优化文章 |
+| `create_draft` | 创建微信草稿 |
+| `publish_article` | 发布文章 |
 
 详见 [docs/MCP.md](docs/MCP.md)。
+
+</details>
+
+<div align="right"><a href="#smearglepaper">↑ 返回顶部</a></div>
 
 ---
 
 ## ⚙️ 配置
 
-复制 `.env.example` 到 `.env`：
-
 ```bash
 cp .env.example .env
 ```
 
-编辑 `.env` 文件：
+编辑 `.env`：
 
 ```bash
-# LLM 配置
+# LLM 配置（必填）
 OPENAI_BASE_URL=https://api.deepseek.com
 OPENAI_API_KEY=your-api-key
 OPENAI_MODEL=deepseek-chat
 
-# 微信公众号配置（可选）
+# 微信公众号配置（可选，仅发布功能需要）
 WECHAT_APP_ID=your-app-id
 WECHAT_APP_SECRET=your-app-secret
 ```
 
-> 💡 如果未配置 LLM，SmearglePaper 会使用本地模板，仍可离线测试工作流。
+> 💡 未配置 LLM 时，SmearglePaper 使用本地模板兜底，仍可离线测试完整工作流。
+
+<div align="right"><a href="#smearglepaper">↑ 返回顶部</a></div>
 
 ---
 
@@ -219,7 +233,7 @@ WECHAT_APP_SECRET=your-app-secret
 ```
 SmearglePaper/
 ├── src/
-│   ├── smearglepaper/      # 核心代码
+│   ├── smearglepaper/      # 核心业务逻辑
 │   └── mcp_server/         # MCP 服务器
 ├── data/
 │   ├── papers/             # 收集的论文
@@ -234,9 +248,15 @@ SmearglePaper/
 └── tests/                  # 测试
 ```
 
+<div align="right"><a href="#smearglepaper">↑ 返回顶部</a></div>
+
 ---
 
 ## 🧪 开发
+
+<details>
+<summary><strong>开发环境、测试与调试 — 点击展开</strong></summary>
+<br>
 
 ```bash
 # 运行测试
@@ -249,23 +269,29 @@ python -m smearglepaper preflight
 python -c 'import mcp_server.server; print("mcp import ok")'
 ```
 
+</details>
+
+<div align="right"><a href="#smearglepaper">↑ 返回顶部</a></div>
+
 ---
 
 ## 🤝 贡献
 
-欢迎提交 Issue 和 Pull Request！
+欢迎所有形式的贡献！
 
 1. Fork 本仓库
-2. 创建特性分支 (`git checkout -b feature/amazing-feature`)
-3. 提交更改 (`git commit -m 'Add amazing feature'`)
-4. 推送到分支 (`git push origin feature/amazing-feature`)
+2. 创建特性分支（`git checkout -b feature/amazing-feature`）
+3. 提交更改（`git commit -m 'feat: add amazing feature'`）
+4. 推送到分支（`git push origin feature/amazing-feature`）
 5. 创建 Pull Request
+
+<div align="right"><a href="#smearglepaper">↑ 返回顶部</a></div>
 
 ---
 
-## 📄 License
+## 📄 许可证
 
-MIT License - 详见 [LICENSE](LICENSE)
+MIT License — 详见 [LICENSE](LICENSE)
 
 ---
 
@@ -286,8 +312,6 @@ MIT License - 详见 [LICENSE](LICENSE)
     <img src="https://api.star-history.com/svg?repos=GetIT-Sunday/SmearglePaper&type=Date" alt="Star History Chart" width="600">
   </a>
 </p>
-
----
 
 <p align="center">
   <sub>Made with ✨ by <a href="https://github.com/GetIT-Sunday">GetIT-Sunday</a> using <a href="https://github.com/GetIT-Sunday/ReadmeMagic-github-readme-design-skill">ReadmeMagic</a></sub>
