@@ -5,6 +5,39 @@ from typing import Any
 
 from .workflow import SmearglePaperWorkflow
 
+
+TOOL_SKILLS: dict[str, str] = {
+    "collect_papers": "autowechat.paper-deep-read",
+    "rank_papers": "autowechat.paper-deep-read",
+    "ingest_paper": "autowechat.paper-deep-read",
+    "generate_article": "autowechat.write-paper-wechat",
+    "run_writing_agent": "autowechat.write-paper-wechat",
+    "prepare_agent_assets": "autowechat.write-paper-wechat",
+    "review_article": "autowechat.write-paper-wechat",
+    "improve_article": "autowechat.write-paper-wechat",
+    "create_wechat_draft": "autowechat.auto-publish",
+    "daily_digest": "autowechat.daily-digest",
+    "trend_analysis": "autowechat.trend-analysis",
+    "agent_run": "autowechat.auto-publish",
+    "check_status": "autowechat.auto-publish",
+}
+
+
+def installed_capabilities(project_root: "Path | None" = None) -> tuple[list[dict[str, Any]], str]:
+    """Return tools backed by installed Skills and a concise model catalog."""
+    from pathlib import Path
+    from .pack_manager import InstalledPackStore
+    from .skill_registry import SkillRegistry
+
+    root = project_root or Path(__file__).resolve().parents[2]
+    pack_store = InstalledPackStore(root / ".aigc")
+    registry = SkillRegistry((root / "skills", *pack_store.skill_roots()))
+    valid_ids = {package.manifest.id for package in registry.list() if not package.validate()}
+    tools = [tool for tool in TOOLS if TOOL_SKILLS.get(str(tool.get("function", {}).get("name", ""))) in valid_ids]
+    summaries = [package.capability_summary() for package in registry.list() if package.manifest.id in valid_ids]
+    catalog = "已安装的可用 Skills：\n" + "\n".join(summaries) if summaries else "当前没有通过校验的 Skill。"
+    return tools, catalog
+
 SYSTEM_PROMPT = """你是 SmearglePaper，AI 论文信息助手。你可以：
 - 收集 arXiv 论文、博客、GitHub 热门仓库
 - 对论文排名、解读、生成中文文章

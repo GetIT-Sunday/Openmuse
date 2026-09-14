@@ -151,16 +151,20 @@ smearglepaper preflight
 <table>
 <tr><th>Command</th><th>Description</th></tr>
 <tr><td><code>smearglepaper topics</code></td><td>List available topic presets</td></tr>
-<tr><td><code>smearglepaper collect</code></td><td>Collect arXiv papers</td></tr>
+<tr><td><code>smearglepaper</code></td><td>Launch the Agent-native TUI</td></tr>
+<tr><td><code>smearglepaper run paper-to-article</code></td><td>Run the resumable paper writing workflow</td></tr>
+<tr><td><code>smearglepaper run paper-to-wechat</code></td><td>Create a dry-run WeChat draft; real writes require approval</td></tr>
+<tr><td><code>smearglepaper runs list</code></td><td>Inspect, resume, retry, or cancel Runtime runs</td></tr>
+<tr><td><code>smearglepaper collect-arxiv</code></td><td>Collect arXiv papers</td></tr>
 <tr><td><code>smearglepaper collect-blogs</code></td><td>Collect AI engineering blogs</td></tr>
 <tr><td><code>smearglepaper collect-github</code></td><td>Collect GitHub Trending projects</td></tr>
-<tr><td><code>smearglepaper rank</code></td><td>Rank collected papers</td></tr>
-<tr><td><code>smearglepaper read</code></td><td>Read a paper</td></tr>
-<tr><td><code>smearglepaper write</code></td><td>Generate an article</td></tr>
+<tr><td><code>smearglepaper rank-papers</code></td><td>Rank collected papers</td></tr>
+<tr><td><code>smearglepaper ingest-paper</code></td><td>Read a paper</td></tr>
+<tr><td><code>smearglepaper generate-article</code></td><td>Generate an article</td></tr>
 <tr><td><code>smearglepaper review-article</code></td><td>Review article quality</td></tr>
 <tr><td><code>smearglepaper improve-article</code></td><td>Improve article with LLM</td></tr>
-<tr><td><code>smearglepaper draft</code></td><td>Create WeChat draft</td></tr>
-<tr><td><code>smearglepaper agent-run</code></td><td>Run the full automated pipeline</td></tr>
+<tr><td><code>smearglepaper create-wechat-draft</code></td><td>Compatibility command for WeChat drafts</td></tr>
+<tr><td><code>smearglepaper agent</code></td><td>Start a Runtime workflow from natural language</td></tr>
 <tr><td><code>smearglepaper daily-digest</code></td><td>Daily paper digest</td></tr>
 <tr><td><code>smearglepaper trend-analysis</code></td><td>Trend analysis</td></tr>
 </table>

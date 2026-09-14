@@ -21,6 +21,27 @@ PURPLE = "#a78bfa"
 APP_CSS = """
 Screen {
     layout: vertical;
+    background: #0b0d10;
+    color: #d7dde8;
+}
+
+#approval-modal {
+    width: 60;
+    height: 17;
+    padding: 2 3;
+    background: #15181d;
+    border: solid #eab308;
+    align: center middle;
+}
+
+#approval-modal Horizontal {
+    height: 3;
+    margin-top: 2;
+    align: right middle;
+}
+
+#approval-modal Button {
+    margin-left: 1;
 }
 
 /* ── Header ──────────────────────────────────────────────────────────── */
@@ -37,9 +58,177 @@ Screen {
 /* ── Main Container ──────────────────────────────────────────────────── */
 
 #main-container {
-    layout: horizontal;
+    layout: vertical;
     height: 1fr;
     width: 100%;
+    padding: 1 4 0 4;
+}
+
+/* ── AutoWechat Effect Stage ───────────────────────────────────────── */
+
+#effect-stage {
+    height: 19;
+    min-height: 19;
+    max-height: 24;
+    width: 100%;
+    padding: 1 3;
+    background: #101319;
+    border: round #303642;
+    content-align: left top;
+}
+
+#stage-brand {
+    height: 2;
+    width: 100%;
+    color: #f59e0b;
+    text-style: bold;
+    text-align: left;
+    padding-left: 2;
+}
+
+#stage-brand.logo {
+    height: 5;
+    color: #f59e0b;
+    text-style: bold;
+    text-align: center;
+    content-align: center middle;
+    padding-left: 0;
+}
+
+#stage-current.idle {
+    text-align: center;
+    padding-left: 0;
+}
+
+#stage-subtitle {
+    height: 1;
+    width: 100%;
+    color: #7d8596;
+    text-align: left;
+    padding-left: 2;
+}
+
+#stage-subtitle.logo {
+    text-align: center;
+    padding-left: 0;
+}
+
+#stage-status {
+    height: 2;
+    width: 100%;
+    margin-top: 1;
+    color: #d7dde8;
+    text-style: bold;
+    text-align: left;
+    padding-left: 2;
+}
+
+#stage-workflow {
+    height: 4;
+    width: 100%;
+    color: #7d8596;
+    text-align: left;
+    padding: 0 2;
+    background: #15181d;
+}
+
+#stage-current {
+    height: 3;
+    width: 100%;
+    margin-top: 1;
+    color: #d7dde8;
+    text-align: left;
+    padding-left: 2;
+}
+
+#stage-quick-actions, #stage-result-actions {
+    height: 3;
+    width: 100%;
+    margin-top: 1;
+    align: center middle;
+}
+
+#stage-quick-actions Button, #stage-result-actions Button {
+    height: 3;
+    min-width: 16;
+    margin: 0 1;
+}
+
+#stage-candidates {
+    height: 1fr;
+    min-height: 4;
+    max-height: 15;
+    width: 100%;
+    background: #101319;
+    border: none;
+}
+
+#stage-candidates ListItem {
+    height: auto;
+    min-height: 4;
+    padding: 0 2;
+    color: #d7dde8;
+}
+
+#stage-candidates ListItem.--highlight {
+    background: #1c2027;
+    color: #ffffff;
+}
+
+#stage-artifacts {
+    height: 3;
+    width: 100%;
+    margin-top: 1;
+    color: #7d8596;
+    text-align: left;
+    padding: 0 2;
+}
+
+#effect-stage.compact {
+    height: 10;
+    min-height: 10;
+    max-height: 10;
+    padding: 0 2;
+}
+
+#effect-stage.compact #stage-brand {
+    height: 2;
+    text-align: left;
+    content-align: left middle;
+    padding-left: 1;
+}
+
+#effect-stage.compact #stage-subtitle,
+#effect-stage.compact #stage-workflow,
+#effect-stage.compact #stage-artifacts,
+#effect-stage.compact #quick-paper,
+#effect-stage.compact #quick-continue,
+#effect-stage.compact #action-revise,
+#effect-stage.compact #action-open,
+#effect-stage.compact #action-draft {
+    display: none;
+}
+
+/* ── Conversation ──────────────────────────────────────────────────── */
+
+#conversation-area {
+    height: 7;
+    min-height: 7;
+    width: 100%;
+    margin-top: 1;
+    background: #0b0d10;
+}
+
+#conversation-area.has-messages {
+    height: 1fr;
+    min-height: 8;
+}
+
+#conversation-label {
+    height: 1;
+    color: #7d8596;
+    padding-left: 2;
+    text-style: bold;
 }
 
 /* ── Sidebar ─────────────────────────────────────────────────────────── */
@@ -144,8 +333,12 @@ Screen {
 
 #trace-area {
     height: 1fr;
+    min-height: 0;
     overflow-y: auto;
     padding: 1 2;
+    margin: 0 2;
+    background: #101319;
+    border-left: solid #303642;
 }
 
 .trace-tag-system {
@@ -160,6 +353,11 @@ Screen {
 
 .trace-tag-agent {
     color: #60a5fa;
+    text-style: bold;
+}
+
+.trace-tag-activity {
+    color: #facc15;
     text-style: bold;
 }
 
@@ -186,7 +384,7 @@ Screen {
 /* ── Input Section ───────────────────────────────────────────────────── */
 
 #input-bar {
-    height: 3;
+    height: 5;
     padding: 0 2;
     background: #0b0d10;
 }
@@ -194,16 +392,25 @@ Screen {
 #chat-input {
     width: 100%;
     height: 3;
-    border: solid #22d3ee;
+    border: round #22d3ee;
     background: #15181d;
+    padding: 0 1;
 }
+
+#composer-meta {
+    height: 1;
+    color: #7d8596;
+    padding-left: 1;
+    width: 1fr;
+}
+
 
 /* ── Footer ──────────────────────────────────────────────────────────── */
 
 #footer-bar {
     height: 1;
     width: 100%;
-    background: #1a1d24;
+    background: #0b0d10;
     color: #7d8596;
     content-align: center middle;
     padding: 0 1;

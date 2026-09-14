@@ -2,6 +2,7 @@ from __future__ import annotations
 
 import datetime as dt
 import re
+from collections.abc import Callable
 from pathlib import Path
 
 from .agent_reviews import (
@@ -45,6 +46,7 @@ class PaperWritingAgent:
         *,
         notes: str = "",
         original_article: str = "",
+        revision_instruction: str = "",
         target_audience: str = "AI方向研究生和算法岗候选人",
         style_mode: str = "balanced",
         target_score: int = 85,
@@ -74,8 +76,10 @@ class PaperWritingAgent:
             "max_revisions": max_revisions,
             "target_audience": target_audience,
             "style_mode": style_mode,
+            "revision_instruction": revision_instruction,
             "model_available": self.model_available,
             "upload_images": upload_images,
+            "model_fallbacks": [],
             "stages": stages,
             "attempts": attempts,
             "final": None,
@@ -87,15 +91,30 @@ class PaperWritingAgent:
                 run_state["active_stage"] = active_stage
             write_json(manifest_path, run_state)
 
-        def call_model(active_stage: str, system: str, prompt: str, temperature: float) -> str:
+        def local_draft() -> str:
+            model = getattr(self.writer, "model", None)
+            return ArticleWriter(model=model if isinstance(model, str) else None).write_local(paper, parsed)
+
+        def call_model(
+            active_stage: str,
+            system: str,
+            prompt: str,
+            temperature: float,
+            fallback: Callable[[], str],
+        ) -> str:
             persist(active_stage)
             try:
                 return self.writer._call_model(system, prompt, temperature=temperature)
             except Exception as exc:
-                run_state["status"] = "failed"
-                run_state["error"] = {"type": type(exc).__name__, "message": str(exc)}
+                self.model_available = False
+                run_state["model_available"] = False
+                model_fallbacks = run_state.get("model_fallbacks")
+                if isinstance(model_fallbacks, list):
+                    model_fallbacks.append(
+                        {"stage": active_stage, "type": type(exc).__name__, "message": str(exc)}
+                    )
                 persist(active_stage)
-                raise
+                return fallback()
 
         persist()
 
@@ -142,12 +161,15 @@ class PaperWritingAgent:
         stages.append(_stage("style-analyst", [style_path, style_json]))
         persist("outline-planner")
 
-        if self.model_available:
+        if original_article and revision_instruction:
+            strategy = f"根据用户要求定向修订现有文章：{revision_instruction}"
+        elif self.model_available:
             strategy = call_model(
                 "outline-planner",
                 "你是论文写作 Agent 的分析规划器。你只依据给定证据制定可执行写作策略。",
                 strategy_prompt(paper, evidence_packet, diagnosis_md, style_report, target_audience, style_mode),
                 0.2,
+                lambda: local_strategy(paper, parsed),
             )
         else:
             strategy = local_strategy(paper, parsed)
@@ -157,15 +179,24 @@ class PaperWritingAgent:
         stages.append(_stage("outline-planner", [strategy_path]))
         persist("draft-writer")
 
-        if self.model_available:
+        if original_article and revision_instruction and self.model_available:
+            markdown = call_model(
+                "user-revision",
+                "你是严谨的中文科技文章修订编辑。保留可靠内容，只执行用户明确提出的修改。",
+                user_revision_prompt(paper, evidence_packet, original_article, revision_instruction, target_audience),
+                0.25,
+                lambda: original_article,
+            )
+        elif self.model_available:
             markdown = call_model(
                 "draft-writer",
                 "你是严谨的中文 AI 论文解读写作 Agent。输出可发布的 Markdown 正文。",
                 draft_prompt(paper, evidence_packet, strategy, diagnosis_md, style_report, target_audience, style_mode),
                 0.35,
+                local_draft,
             )
         else:
-            markdown = self.writer.write(paper, parsed=parsed)
+            markdown = original_article if original_article and revision_instruction else local_draft()
         markdown = _strip_fence(markdown)
 
         best: tuple[int, Article, dict[str, object], dict[str, object], Path] | None = None
@@ -228,6 +259,7 @@ class PaperWritingAgent:
                     "你是论文写作 Agent 的修订编辑。只修复审稿指出的问题，不得引入无证据事实。",
                     revision_prompt(paper, evidence_packet, current_markdown, technical, wechat),
                     0.25,
+                    lambda markdown=current_markdown: markdown,
                 )
             )
 
@@ -311,6 +343,7 @@ class PaperWritingAgent:
             "target_audience": target_audience,
             "style_mode": style_mode,
             "model_available": self.model_available,
+            "model_fallbacks": list(run_state.get("model_fallbacks", [])),
             "upload_images": upload_images,
             "stages": stages,
             "attempts": attempts,
@@ -327,6 +360,7 @@ class PaperWritingAgent:
                 "asset_upload": asset_report,
                 "score": best_score,
                 "ready": ready,
+                "model_fallback_used": bool(run_state.get("model_fallbacks")),
             },
             "memory": {name: str(path) for name, path in memory_paths.items()},
         }
@@ -497,6 +531,34 @@ def draft_prompt(
 """
 
 
+def user_revision_prompt(
+    paper: PaperMeta,
+    evidence_packet: str,
+    markdown: str,
+    instruction: str,
+    target_audience: str,
+) -> str:
+    return f"""请根据用户要求修订《{paper.title}》的现有文章。
+
+用户要求：
+{instruction}
+
+目标读者：{target_audience}
+
+约束：
+1. 只执行用户要求涉及的修改，保留其他可靠内容与整体结构；
+2. 所有事实、实验数字和结论必须受证据包支持；
+3. 不得删除论文链接，不得引入无证据事实；
+4. 输出完整 Markdown 正文，不解释修改过程。
+
+现有文章：
+{markdown}
+
+证据包：
+{evidence_packet}
+"""
+
+
 def revision_prompt(
     paper: PaperMeta,
     evidence_packet: str,
@@ -568,6 +630,12 @@ def _apply_guardrail_repairs(markdown: str, paper: PaperMeta | None = None) -> s
         repaired = re.sub(r"(#{2,3}\s+[^\n]*后续影响[^\n]*\n)", rf"\1{disclaimer}", repaired, count=1)
         if disclaimer.strip() not in repaired:
             repaired += disclaimer
+    if "这篇论文没有证明什么" not in repaired:
+        repaired += (
+            "\n\n## 这篇论文没有证明什么？\n\n"
+            "- 当前证据只支持论文明确描述的任务、数据与指标，不能外推为所有场景下的通用能力。\n"
+            "- 结果不能单独证明每个组件都不可替代，也不能替代独立复现与真实业务验证。\n"
+        )
     if not any(term in repaired for term in ("面试", "学习迁移", "项目迁移")):
         repaired += (
             "\n\n## 面试与项目迁移：应该验证什么？\n\n"

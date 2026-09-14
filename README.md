@@ -20,7 +20,7 @@
 </p>
 
 <p align="center">
-  <img src="https://img.shields.io/badge/version-0.1.0-blue?style=flat-square" alt="Version">
+  <img src="https://img.shields.io/badge/version-0.2.0-blue?style=flat-square" alt="Version">
   <img src="https://img.shields.io/badge/license-MIT-green?style=flat-square" alt="License">
   <img src="https://img.shields.io/badge/python-3.10+-yellow?style=flat-square" alt="Python">
   <img src="https://img.shields.io/badge/arXiv-papers-orange?style=flat-square" alt="arXiv">
@@ -87,6 +87,22 @@ SmearglePaper 将最新 AI 论文转化为结构化的中文技术文章草稿�
 
 ## 🚀 快速开始
 
+### Agent 原生 Runtime（0.2）
+
+无参数启动 OpenCode 风格交互工作台；CLI、TUI 与 MCP 共用同一个可恢复 Runtime：
+
+```bash
+smearglepaper
+smearglepaper run paper-to-article --paper-url https://arxiv.org/abs/1706.03762
+smearglepaper agent "解读这篇论文并生成公众号草稿" --paper-url https://arxiv.org/abs/1706.03762
+smearglepaper run paper-research --offline-example --workspace ./demo-workspace
+smearglepaper runs list --json
+```
+
+TUI 以“论文或主题 → 候选确认 → 文章 → 对话修改 → 手机预览”为主流程。主题输入会展示 3 篇候选论文；粘贴论文链接会直接进入阅读与写作。文章完成后按 `Ctrl+O` 打开手机尺寸预览，后续修改会自动刷新。
+
+每次执行都会保存 `manifest.json`、顺序事件流、检查点与带哈希的 Artifact。真实微信写入默认禁用；使用 `--real` 后仍会停在审批门禁，需显式执行 `smearglepaper approve RUN_ID approve-publish`。详见 [CLI](docs/CLI.md) 与 [Runtime](docs/RUNTIME.md)。
+
 **① 一键运行完整流水线**
 
 ```bash
@@ -151,16 +167,20 @@ smearglepaper preflight
 <table>
 <tr><th>命令</th><th>说明</th></tr>
 <tr><td><code>smearglepaper topics</code></td><td>列出可用主题预设</td></tr>
-<tr><td><code>smearglepaper collect</code></td><td>收集 arXiv 论文</td></tr>
+<tr><td><code>smearglepaper</code></td><td>启动 Agent 原生 TUI</td></tr>
+<tr><td><code>smearglepaper run paper-to-article</code></td><td>运行可恢复的论文写作工作流</td></tr>
+<tr><td><code>smearglepaper run paper-to-wechat</code></td><td>生成默认 dry-run、真实写入需审批的微信草稿</td></tr>
+<tr><td><code>smearglepaper runs list</code></td><td>查看、恢复、重试或取消 Runtime 运行</td></tr>
+<tr><td><code>smearglepaper collect-arxiv</code></td><td>收集 arXiv 论文</td></tr>
 <tr><td><code>smearglepaper collect-blogs</code></td><td>收集 AI 博客</td></tr>
 <tr><td><code>smearglepaper collect-github</code></td><td>收集 GitHub Trending</td></tr>
-<tr><td><code>smearglepaper rank</code></td><td>排序论文</td></tr>
-<tr><td><code>smearglepaper read</code></td><td>读取论文</td></tr>
-<tr><td><code>smearglepaper write</code></td><td>生成文章</td></tr>
+<tr><td><code>smearglepaper rank-papers</code></td><td>排序论文</td></tr>
+<tr><td><code>smearglepaper ingest-paper</code></td><td>读取论文</td></tr>
+<tr><td><code>smearglepaper generate-article</code></td><td>生成文章</td></tr>
 <tr><td><code>smearglepaper review-article</code></td><td>审查文章质量</td></tr>
 <tr><td><code>smearglepaper improve-article</code></td><td>优化文章</td></tr>
-<tr><td><code>smearglepaper draft</code></td><td>生成微信草稿</td></tr>
-<tr><td><code>smearglepaper agent-run</code></td><td>运行完整自动化流水线</td></tr>
+<tr><td><code>smearglepaper create-wechat-draft</code></td><td>兼容层：生成微信草稿</td></tr>
+<tr><td><code>smearglepaper agent</code></td><td>以自然语言启动 Runtime 工作流</td></tr>
 <tr><td><code>smearglepaper daily-digest</code></td><td>每日摘要</td></tr>
 <tr><td><code>smearglepaper trend-analysis</code></td><td>趋势分析</td></tr>
 </table>

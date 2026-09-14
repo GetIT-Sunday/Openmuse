@@ -92,7 +92,7 @@ class RunStats:
     papers_selected: int = 0
     parsed: int = 0
     tokens: int = 0
-    cost: float = 0.0
+    cost: float | None = None
 
     def __str__(self) -> str:
         parts = []
@@ -144,6 +144,10 @@ class RunState:
     artifacts: list[ArtifactInfo] = field(default_factory=list)
     stats: RunStats = field(default_factory=RunStats)
     model: ModelInfo | None = None
+    quality: dict[str, object] = field(default_factory=dict)
+    providers: dict[str, str] = field(default_factory=dict)
+    workspace: str = ""
+    active_agent: str = "main"
 
     # Timestamps
     started_at: str = ""

@@ -19,7 +19,8 @@ def load_dotenv(path: Path | None = None) -> None:
         key = key.strip()
         value = value.strip().strip('"').strip("'")
         if key:
-            os.environ[key] = value
+            # Explicit process environment values take precedence over .env.
+            os.environ.setdefault(key, value)
 
 
 load_dotenv()

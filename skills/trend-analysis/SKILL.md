@@ -1,5 +1,7 @@
 ---
 name: trend-analysis
+id: autowechat.trend-analysis
+version: 0.1.0
 description: |
   Analyze research trends from papers, blog posts, and GitHub trending repos.
   Identifies hot keywords, trending topics, and recommends research directions.

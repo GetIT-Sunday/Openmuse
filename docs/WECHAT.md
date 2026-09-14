@@ -18,13 +18,13 @@ WECHAT_APP_SECRET=...
 Then run without `--dry-run`:
 
 ```bash
-smearglepaper draft --query "LLM reasoning" --days 30
+smearglepaper run paper-to-wechat --query "LLM reasoning" --days 30
 ```
 
 ## Update Existing Draft
 
 ```bash
-smearglepaper wechat-update-draft --article-json data/articles/<paper>.json --media-id <media-id>
+smearglepaper update-wechat-draft --article-json data/articles/<paper>.json --media-id <media-id>
 ```
 
 ## Notes

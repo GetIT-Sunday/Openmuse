@@ -1,5 +1,7 @@
 ---
 name: daily-digest
+id: autowechat.daily-digest
+version: 0.1.0
 description: |
   Collect and summarize daily AI research papers, blog posts, and GitHub trending repos.
   Generates a structured digest report. Optionally sends to Feishu.

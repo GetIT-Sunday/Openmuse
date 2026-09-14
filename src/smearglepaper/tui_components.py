@@ -2,9 +2,13 @@
 from __future__ import annotations
 
 import re
+from typing import cast
+
+from rich.markup import escape
 from textual.app import ComposeResult
-from textual.containers import Vertical
+from textual.containers import Horizontal, Vertical
 from textual.widgets import (
+    Button,
     Input,
     Label,
     ListItem,
@@ -13,13 +17,230 @@ from textual.widgets import (
 )
 
 from .config import DATA_DIR
-from .run_state import (
-    RunState,
-    StepStatus,
-    load_model_info,
-    scan_artifacts,
-)
+from .run_state import RunState, StepStatus, scan_artifacts
 from .session import Session
+from .tui_presentation import RunPresentation
+
+AUTOWECHAT_LOGO = """
+┏━┓ ╻ ╻ ╺┳╸ ┏━┓   ╻ ╻ ┏━╸ ┏━╸ ╻ ╻  ┏━┓ ╺┳╸
+┣━┫ ┃ ┃  ┃  ┃ ┃   ┃╻┃ ┣╸  ┃   ┣━┫  ┣━┫  ┃
+╹ ╹ ┗━┛  ╹  ┗━┛   ┗┻┛ ┗━╸ ┗━╸ ╹ ╹  ╹ ╹  ╹
+""".strip("\n")
+
+# ── AutoWechat Effect Stage ─────────────────────────────────────────────
+
+class AutoWechatStage(Vertical):
+    """Primary canvas for workflow progress and generated artifacts."""
+
+    def __init__(self, *args, **kwargs) -> None:
+        super().__init__(*args, **kwargs)
+        self._idle = True
+        self._compact = False
+
+    def set_compact(self, compact: bool) -> None:
+        self._compact = compact
+        self.set_class(compact, "compact")
+        self._update_brand()
+
+    def _update_brand(self) -> None:
+        brand = self.query_one("#stage-brand", Static)
+        brand.update("AutoWechat" if self._compact or not self._idle else AUTOWECHAT_LOGO)
+        brand.set_class(self._idle and not self._compact, "logo")
+        self.query_one("#stage-subtitle", Static).set_class(
+            self._idle and not self._compact, "logo"
+        )
+
+    def _set_idle_layout(self, idle: bool) -> None:
+        self._idle = idle
+        self._update_brand()
+        self.query_one("#stage-status", Static).display = not idle
+        self.query_one("#stage-workflow", Static).display = not idle
+        self.query_one("#stage-artifacts", Static).display = not idle
+        self.query_one("#stage-current", Static).set_class(idle, "idle")
+
+    def compose(self) -> ComposeResult:
+        yield Static("AutoWechat", id="stage-brand")
+        yield Static("把研究变成值得发布的文章", id="stage-subtitle")
+        yield Static("● 准备就绪", id="stage-status")
+        yield Static(
+            "选择材料   →   理解论文   →   撰写文章   →   质量审阅   →   准备预览",
+            id="stage-workflow",
+        )
+        yield Static("粘贴论文链接，或者告诉我你关心的研究主题。", id="stage-current")
+        yield Horizontal(
+            Button("解读一篇论文", id="quick-paper"),
+            Button("从主题寻找选题", id="quick-topic", variant="primary"),
+            Button("继续上次任务", id="quick-continue"),
+            id="stage-quick-actions",
+        )
+        yield ListView(id="stage-candidates")
+        yield Static("文章和研究材料会自动保存在本地", id="stage-artifacts")
+        yield Horizontal(
+            Button("继续修改", id="action-revise"),
+            Button("手机预览", id="action-preview", variant="primary"),
+            Button("打开文章", id="action-open"),
+            Button("创建微信草稿", id="action-draft"),
+            id="stage-result-actions",
+        )
+
+    def update_idle(self) -> None:
+        self._set_idle_layout(True)
+        self.query_one("#stage-status", Static).update("[#22c55e]● 准备就绪[/]")
+        self.query_one("#stage-workflow", Static).update(
+            "[#7d8596]1 选择材料   2 理解论文   3 撰写文章[/]\n"
+            "[#7d8596]4 质量审阅   5 准备预览[/]"
+        )
+        self.query_one("#stage-current", Static).update("粘贴论文链接，或者告诉我你关心的研究主题。")
+        self.query_one("#stage-artifacts", Static).update("文章和研究材料会自动保存在本地")
+        self.query_one("#stage-quick-actions", Horizontal).display = True
+        self.query_one("#stage-candidates", ListView).display = False
+        self.query_one("#stage-result-actions", Horizontal).display = False
+
+    def update_running(self, run_state: RunState) -> None:
+        self.update_state(run_state)
+
+    def update_completed(self, run_state: RunState) -> None:
+        self.update_state(run_state)
+
+    def update_failed(self, message: str, run_state: RunState | None = None) -> None:
+        if run_state is not None:
+            self.update_state(run_state, error=message)
+            return
+        self.query_one("#stage-status", Static).update("[#ef4444]● 未完成[/]")
+        self.query_one("#stage-current", Static).update(f"失败 · {message}")
+
+    def update_presentation(self, presentation: RunPresentation, run_state: RunState) -> None:
+        """Render a workflow-aware result without exposing storage paths."""
+        self._set_idle_layout(False)
+        status_map = {
+            "pending": ("准备中", "#22c55e"),
+            "running": ("正在处理", "#eab308"),
+            "waiting_input": ("等待选择", "#eab308"),
+            "waiting_approval": ("等待确认", "#eab308"),
+            "cancelling": ("正在取消", "#eab308"),
+            "completed": ("已完成", "#22c55e"),
+            "failed": ("未完成", "#ef4444"),
+            "cancelled": ("已取消", "#ef4444"),
+        }
+        label, color = status_map.get(presentation.status, ("准备就绪", "#22c55e"))
+        metrics = f"{presentation.progress_current}/{presentation.progress_total}"
+        self.query_one("#stage-status", Static).update(
+            f"[{color}]● {label}[/]  ·  {escape(presentation.phase)}  ·  {metrics}"
+        )
+        phases = ("选择材料", "理解论文", "撰写文章", "质量审阅", "准备预览")
+        phase_index = phases.index(presentation.phase) if presentation.phase in phases else len(phases) if presentation.status == "completed" else 0
+        parts = [
+            f"[{'#22c55e' if index < phase_index else '#eab308' if index == phase_index else '#7d8596'}]"
+            f"{'✓' if index < phase_index else '●' if index == phase_index else '·'} {phase}[/]"
+            for index, phase in enumerate(phases)
+        ]
+        self.query_one("#stage-workflow", Static).update(
+            "\n".join(("   ".join(parts[:3]), "   ".join(parts[3:])))
+        )
+
+        subject = f"\n{escape(presentation.subject)}" if presentation.subject else ""
+        quality_text = f"  ·  {escape(presentation.quality_verdict)}" if presentation.quality_verdict else ""
+        self.query_one("#stage-current", Static).update(
+            f"[bold]{escape(presentation.headline)}[/]{quality_text}{subject}"
+        )
+        issue_text = " · ".join(escape(issue) for issue in presentation.issues)
+        if presentation.artifacts and presentation.workflow in {"paper-to-article", "paper-to-wechat"}:
+            file_text = "文章已自动保存"
+        elif presentation.artifacts:
+            file_text = "研究材料已自动保存"
+        else:
+            file_text = "尚未生成文章"
+        self.query_one("#stage-artifacts", Static).update(
+            f"{file_text}" + (f"\n建议处理：{issue_text}" if issue_text else f"\n下一步：{escape(presentation.next_action)}")
+        )
+
+        self.query_one("#stage-quick-actions", Horizontal).display = False
+        candidate_list = self.query_one("#stage-candidates", ListView)
+        interaction = presentation.interaction or {}
+        options = list(interaction.get("options", [])) if interaction.get("status") == "pending" else []
+        candidate_list.display = bool(options) or presentation.status == "waiting_input"
+        candidate_list.clear()
+        if presentation.status == "waiting_input" and not options:
+            empty_message = str(interaction.get("empty_message", "暂时没有找到合适的论文。"))
+            suggestions = " · ".join(str(item) for item in interaction.get("suggested_actions", []))
+            self.query_one("#stage-current", Static).update(empty_message)
+            self.query_one("#stage-artifacts", Static).update(f"下一步：{suggestions or '输入新的研究主题'}")
+        for index, option in enumerate(options[:3], 1):
+            if not isinstance(option, dict):
+                continue
+            reasons = " · ".join(str(item) for item in list(option.get("recommendation_reasons", []))[:2])
+            contribution = str(option.get("one_sentence_contribution", ""))
+            published = str(option.get("published_at", ""))[:10]
+            label_text = f"{index}. {option.get('title', '')}\n   {published}  {reasons}\n   {contribution}"
+            candidate_list.append(ListItem(Label(label_text), name=str(option.get("paper_id", ""))))
+
+        action_map = {action.id: action for action in presentation.actions}
+        result_actions = self.query_one("#stage-result-actions", Horizontal)
+        result_actions.display = presentation.status == "completed" and bool(action_map)
+        for action_id in ("revise", "preview", "open", "draft"):
+            button = self.query_one(f"#action-{action_id}", Button)
+            action = action_map.get(action_id)
+            button.display = action is not None
+            button.disabled = not action.enabled if action else True
+
+    def update_state(self, run_state: RunState, *, error: str = "") -> None:
+        if run_state.status.value == "idle" and not run_state.steps:
+            self.update_idle()
+            return
+        self._set_idle_layout(False)
+
+        status_map = {
+            "idle": ("准备就绪", "#22c55e"),
+            "running": ("正在处理", "#eab308"),
+            "success": ("已完成", "#22c55e"),
+            "failed": ("未完成", "#ef4444"),
+        }
+        label, color = status_map[run_state.status.value]
+        title = {
+            "paper-research": "论文研究",
+            "paper-to-article": "文章生成",
+            "paper-to-wechat": "公众号文章",
+            "daily-digest": "研究日报",
+            "publish-existing": "创建微信草稿",
+        }.get(run_state.title, "研究任务")
+        self.query_one("#stage-status", Static).update(
+            f"[{color}]● {label}[/]  ·  {title}"
+        )
+
+        step_colors = {
+            StepStatus.WAITING: "#7d8596",
+            StepStatus.RUNNING: "#eab308",
+            StepStatus.SUCCESS: "#22c55e",
+            StepStatus.FAILED: "#ef4444",
+            StepStatus.SKIPPED: "#7d8596",
+        }
+        if run_state.steps:
+            parts = [
+                f"[{step_colors[step.status]}]{step.icon} {step.label}[/]"
+                for step in run_state.steps[:6]
+            ]
+            self.query_one("#stage-workflow", Static).update("   →   ".join(parts))
+
+        if error:
+            current = f"失败 · {error}"
+        elif run_state.status.value == "running":
+            current = "正在处理研究材料，请稍候…"
+        elif run_state.status.value == "success":
+            current = "运行完成 · 可在下方继续调整文章或发布设置"
+        else:
+            failed_step = next(
+                (step.label for step in run_state.steps if step.status == StepStatus.FAILED),
+                title,
+            )
+            current = f"运行未完成 · {failed_step}"
+        self.query_one("#stage-current", Static).update(current)
+
+        if run_state.artifacts:
+            names = "   ·   ".join(artifact.name for artifact in run_state.artifacts[-4:])
+            artifact_text = f"已保存 · {names}"
+        else:
+            artifact_text = "文章和研究材料会自动保存在本地"
+        self.query_one("#stage-artifacts", Static).update(artifact_text)
 
 
 # ── Sidebar ──────────────────────────────────────────────────────────────
@@ -59,7 +280,7 @@ class Sidebar(Vertical):
         for s in self.sessions[:10]:
             title = s.title[:20]
             marker = "●" if s.id == (self.sessions[0].id if self.sessions else "") else "○"
-            list_view.append(ListItem(Label(f" {marker} {title}")))
+            list_view.append(ListItem(Label(f" {marker} {title}"), name=s.id))
 
     def _populate_workflows(self) -> None:
         container = self.query_one("#sidebar-workflows", Vertical)
@@ -77,10 +298,10 @@ class Sidebar(Vertical):
         for s in sessions[:10]:
             title = s.title[:20]
             marker = "●" if s.id == active_id else "○"
-            list_view.append(ListItem(Label(f" {marker} {title}")))
+            list_view.append(ListItem(Label(f" {marker} {title}"), name=s.id))
 
     def update_artifacts_for_run(self, artifacts: list[dict[str, str]]) -> None:
-        """Update artifacts section with mock run artifacts."""
+        """Update the artifact section from durable Runtime records."""
         container = self.query_one("#sidebar-artifacts", Vertical)
         container.remove_children()
         for a in artifacts[:6]:
@@ -152,6 +373,10 @@ class ContextPanel(Vertical):
         yield Vertical(id="ctx-artifacts-list")
         yield Label("STATS", classes="ctx-section-title")
         yield Vertical(id="ctx-stats")
+        yield Label("QUALITY", classes="ctx-section-title")
+        yield Vertical(id="ctx-quality")
+        yield Label("CONNECTIONS", classes="ctx-section-title")
+        yield Vertical(id="ctx-connections")
         yield Label("MODEL", classes="ctx-section-title")
         yield Vertical(id="ctx-model")
 
@@ -162,6 +387,8 @@ class ContextPanel(Vertical):
         self._update_workflows(run_state)
         self._update_artifacts(run_state)
         self._update_stats(run_state)
+        self._update_quality(run_state)
+        self._update_connections(run_state)
         self._update_model(run_state)
 
     def _update_status(self, rs: RunState) -> None:
@@ -253,8 +480,31 @@ class ContextPanel(Vertical):
                 model_name = model_name[:14] + "…"
             container.mount(Label(f" Provider  {m.provider}", classes="ctx-row"))
             container.mount(Label(f" Model     {model_name}", classes="ctx-row"))
+            container.mount(Label(f" Agent     {rs.active_agent}", classes="ctx-row"))
         else:
             container.mount(Label(" No model info", classes="ctx-row-muted"))
+        if rs.workspace:
+            container.mount(Label(f" Workspace {rs.workspace[-18:]}", classes="ctx-row"))
+
+    def _update_quality(self, rs: RunState) -> None:
+        container = self.query_one("#ctx-quality", Vertical)
+        container.remove_children()
+        if not rs.quality:
+            container.mount(Label(" Pending", classes="ctx-row-muted"))
+            return
+        for label, key in (("Technical", "technical_score"), ("WeChat", "wechat_score")):
+            value = rs.quality.get(key)
+            container.mount(Label(f" {label:<10s} {value if value is not None else '-'}", classes="ctx-row"))
+
+    def _update_connections(self, rs: RunState) -> None:
+        container = self.query_one("#ctx-connections", Vertical)
+        container.remove_children()
+        if not rs.providers:
+            container.mount(Label(" Not checked", classes="ctx-row-muted"))
+            return
+        for name, status in rs.providers.items():
+            marker = "●" if status in {"connected", "configured", "available"} else "○"
+            container.mount(Label(f" {marker} {name:<10s} {status}", classes="ctx-row"))
 
 
 # ── Welcome Dashboard ────────────────────────────────────────────────────
@@ -349,7 +599,7 @@ class RunBlockWidget(Vertical):
         summary_lines = [
             f"[bold #a78bfa]Run Summary: {rs.id}[/]",
             f" Papers Collected  {s.papers_collected or '-'}     Selected  {s.papers_selected or '-'}",
-            f" Parsed            {s.parsed or '-'} / {rs.progress.total if rs.progress else '-'}     Tokens    {s.tokens:,}     Est. Cost  ${s.cost:.2f}",
+            f" Parsed            {s.parsed or '-'} / {rs.progress.total if rs.progress else '-'}     Tokens    {s.tokens:,}     Est. Cost  {f'${s.cost:.2f}' if s.cost is not None else 'N/A'}",
         ]
         summary_el.update("\n".join(summary_lines))
 
@@ -357,6 +607,7 @@ class RunBlockWidget(Vertical):
 # ── Command Palette ──────────────────────────────────────────────────────
 
 COMMANDS = [
+    ("preview", "Open mobile article preview"),
     ("collect-arxiv", "Search arXiv papers"),
     ("rank-papers", "Rank collected papers"),
     ("ingest-paper", "Parse selected paper PDF"),
@@ -446,13 +697,21 @@ class CleanInput(Input):
             text = re.sub(pattern, '', text)
         return text
 
-    def _on_key(self, event) -> None:
+    async def _on_key(self, event) -> None:
         """Filter escape sequences from key events."""
+        if event.key in {"shift+enter", "ctrl+enter", "alt+enter"} or (
+            event.key == "enter" and (getattr(event, "shift", False) or getattr(event, "ctrl", False))
+        ):
+            event.stop()
+            event.prevent_default()
+            self.value = cast(str, getattr(self, "value", "")) + "\n"
+            return
         # Let parent handle the key first
-        super()._on_key(event)
+        await super()._on_key(event)
         # Then clean the value if it contains escape sequences
-        if self._clean_text(self.value) != self.value:
-            self.value = self._clean_text(self.value)
+        value = cast(str, getattr(self, "value", ""))
+        if self._clean_text(value) != value:
+            self.value = self._clean_text(value)
 
 
 # ── Input Bar ────────────────────────────────────────────────────────────
@@ -462,19 +721,24 @@ class InputBar(Vertical):
 
     def compose(self) -> ComposeResult:
         yield CleanInput(
-            placeholder="> Ask SmearglePaper or type a command...",
+            placeholder="输入消息，按 Enter 发送...",
             id="chat-input",
         )
+        yield Static("AutoWechat  ·  default model  ·  dry-run", id="composer-meta")
 
     def set_run_mode(self, running: bool) -> None:
         input_widget = self.query_one("#chat-input", Input)
         if running:
-            input_widget.placeholder = "> Agent is running. Type a follow-up or /stop..."
+            input_widget.placeholder = "正在处理；输入要求可继续调整，按 Esc 取消..."
         else:
-            input_widget.placeholder = "> Ask SmearglePaper or type a command..."
+            input_widget.placeholder = "输入消息，按 Enter 发送..."
 
     def get_text(self) -> str:
         return self.query_one("#chat-input", Input).value
 
     def clear(self) -> None:
         self.query_one("#chat-input", Input).value = ""
+
+    def set_meta(self, agent: str, model: str, mode: str) -> None:
+        mode_label = {"running": "正在处理", "real": "真实草稿", "dry-run": "安全预览"}.get(mode, mode)
+        self.query_one("#composer-meta", Static).update(f"AutoWechat  ·  {model}  ·  {mode_label}")

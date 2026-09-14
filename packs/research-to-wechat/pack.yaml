@@ -1,0 +1,15 @@
+id: autowechat/research-to-wechat
+name: Research to WeChat
+version: 0.1.0
+description: Convert research papers into reviewable WeChat articles.
+requires:
+  harness: ">=0.2.0"
+  packs: []
+skills:
+  - write-paper-wechat
+  - paper-deep-read
+  - auto-publish
+  - daily-digest
+  - trend-analysis
+workflows:
+  - workflows/paper-to-wechat.yaml

@@ -1,5 +1,6 @@
 requests>=2.31.0
 certifi>=2024.0.0
+cryptography>=42.0.0
 PyYAML>=6.0.1
 markdown>=3.6
 pypdf>=4.2.0

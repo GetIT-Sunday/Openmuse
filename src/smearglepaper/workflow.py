@@ -1,6 +1,5 @@
 from __future__ import annotations
 
-import datetime as dt
 import sys
 from pathlib import Path
 
@@ -109,12 +108,11 @@ class SmearglePaperWorkflow:
         if collect_blogs:
             step = report.start_step("collect-blogs")
             if resume and blog_latest.exists():
-                blog_result = read_json(blog_latest, {})
+                read_json(blog_latest, {})
                 report.complete_step(step, "skipped", "artifact_exists", [str(blog_latest)])
             else:
-                blog_result = self.collect_blogs(topic or "agents", query, days, max_results)
+                self.collect_blogs(topic or "agents", query, days, max_results)
                 report.complete_step(step, "success", artifacts=[str(blog_latest)])
-            report.to_dict()  # ensure blog_result is used
 
         # Step 2: Collect and rank papers
         paper: PaperMeta
@@ -341,11 +339,13 @@ class SmearglePaperWorkflow:
         paper_title: str | None = None,
         notes_path: Path | None = None,
         article_path: Path | None = None,
+        revision_instruction: str = "",
         target_audience: str = "AI方向研究生和算法岗候选人",
         style_mode: str = "balanced",
         target_score: int = 85,
         max_revisions: int = 3,
         upload_images: bool = False,
+        force_local: bool = False,
     ) -> dict[str, object]:
         from .writing_agent import PaperWritingAgent
 
@@ -372,11 +372,16 @@ class SmearglePaperWorkflow:
             paper.title = paper_title
         notes = notes_path.read_text(encoding="utf-8") if notes_path else ""
         original_article = article_path.read_text(encoding="utf-8") if article_path else ""
-        return PaperWritingAgent().run(
+        return PaperWritingAgent(
+            writer=self.writer,
+            renderer=self.renderer,
+            model_available=False if force_local else None,
+        ).run(
             paper,
             parsed,
             notes=notes,
             original_article=original_article,
+            revision_instruction=revision_instruction,
             target_audience=target_audience,
             style_mode=style_mode,
             target_score=target_score,

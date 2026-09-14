@@ -1,23 +1,29 @@
 from __future__ import annotations
 
+import os
 import tempfile
 import unittest
 import xml.etree.ElementTree as ET
-from unittest.mock import patch
 from pathlib import Path
+from unittest.mock import patch
 
 from smearglepaper.agents import AGENTS, check_agents
 from smearglepaper.blogs import _parse_rss
+from smearglepaper.cli import build_parser
 from smearglepaper.collector import ArxivCollector, parse_arxiv_feed, topic_queries
 from smearglepaper.editor import _load_paper_evidence, optimized_paths
 from smearglepaper.evidence import audit_article_evidence, build_paper_structure, format_evidence_context
 from smearglepaper.figures import place_visuals
-from smearglepaper.llm import ArticleWriter, chat_completions_base_url, format_visual_evidence
+from smearglepaper.llm import (
+    ArticleWriter,
+    chat_completions_base_url,
+    format_visual_evidence,
+    openai_request_headers,
+)
 from smearglepaper.models import Article, PaperMeta
 from smearglepaper.quality import review_article_file
 from smearglepaper.ranker import rank_papers
 from smearglepaper.renderer import WechatRenderer
-from smearglepaper.cli import build_parser
 from smearglepaper.scout import _paper_review_row
 from smearglepaper.tools import SYSTEM_PROMPT, TOOLS
 from smearglepaper.workflow import append_figures
@@ -114,6 +120,29 @@ class CoreTests(unittest.TestCase):
     def test_chat_completions_base_url(self) -> None:
         self.assertEqual(chat_completions_base_url("https://example.com"), "https://example.com/v1")
         self.assertEqual(chat_completions_base_url("https://example.com/v1"), "https://example.com/v1")
+
+    def test_dotenv_does_not_override_explicit_environment(self) -> None:
+        from smearglepaper.config import load_dotenv
+
+        with tempfile.TemporaryDirectory() as tmpdir:
+            dotenv = Path(tmpdir) / ".env"
+            dotenv.write_text("OPENAI_MODEL=from-dotenv\n", encoding="utf-8")
+            with patch.dict("os.environ", {"OPENAI_MODEL": "from-process"}, clear=True):
+                load_dotenv(dotenv)
+                self.assertEqual(os.environ["OPENAI_MODEL"], "from-process")
+
+    def test_openai_headers_include_gateway_compatible_user_agent(self) -> None:
+        with patch.dict("os.environ", {}, clear=False):
+            headers = openai_request_headers("secret")
+        self.assertIn("Mozilla/5.0", headers["User-Agent"])
+        self.assertEqual(headers["Accept"], "application/json")
+        self.assertEqual(headers["Authorization"], "Bearer secret")
+
+    def test_openai_user_agent_can_be_overridden(self) -> None:
+        with patch.dict("os.environ", {"LLM_USER_AGENT": "GatewayClient/1.0"}):
+            headers = openai_request_headers()
+        self.assertEqual(headers["User-Agent"], "GatewayClient/1.0")
+        self.assertNotIn("Authorization", headers)
 
     def test_article_writer_uses_anthropic_configuration(self) -> None:
         paper = PaperMeta("a", "Test", [], "abstract", "arxiv", "", None, "2026-05-20T00:00:00Z")
@@ -302,6 +331,12 @@ class CoreTests(unittest.TestCase):
         self.assertEqual(previewed.command, "task-preview")
         self.assertEqual(previewed.port, 9000)
         self.assertEqual(preview_alias.command, "agent-preview")
+
+    def test_runtime_candidate_selection_parser(self) -> None:
+        args = build_parser().parse_args(["runs", "select", "run-1", "2607.10001"])
+        self.assertEqual(args.runs_command, "select")
+        self.assertEqual(args.run_id, "run-1")
+        self.assertEqual(args.paper_id, "2607.10001")
 
     def test_writing_agent_parser_defaults(self) -> None:
         args = build_parser().parse_args(["writing-agent", "--paper-id", "1706.03762"])

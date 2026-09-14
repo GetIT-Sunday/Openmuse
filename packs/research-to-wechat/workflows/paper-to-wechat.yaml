@@ -1,0 +1,24 @@
+schema_version: 1
+id: autowechat.paper-to-wechat
+name: Research Paper to WeChat Article
+description: Turn a selected research paper into a reviewed WeChat draft.
+inputs:
+  - paper_url
+  - paper_id
+  - topic
+steps:
+  - id: understand
+    skill: autowechat.paper-deep-read
+  - id: write
+    skill: autowechat.write-paper-wechat
+    needs:
+      - understand
+  - id: prepare_draft
+    skill: autowechat.auto-publish
+    needs:
+      - write
+    approval: required
+outputs:
+  - article_markdown
+  - article_html
+  - wechat_draft
