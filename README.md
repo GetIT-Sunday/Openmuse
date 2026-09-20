@@ -1,13 +1,13 @@
 <a name="openmuse"></a><a name="smearglepaper"></a>
 <p align="center">
-  <img src="assets/banner.png" alt="SmearglePaper banner" width="100%">
+  <img src="assets/openmuse-hero.png" alt="OpenMuse AIGC Harness" width="100%">
 </p>
 
 <p align="center">
   <h1 align="center">OpenMuse</h1>
   <p align="center">
-    <strong>AI 论文自动化写作与发布助手</strong><br>
-    <em>Automated AI Paper Writing & Publishing Assistant</em>
+    <strong>可扩展的 AIGC Harness，从研究材料到可发布内容</strong><br>
+    <em>Composable AI workflows for research, writing, review, and publishing</em>
   </p>
   <p align="center">
     <a href="#-功能特性">功能特性</a> •
@@ -25,20 +25,36 @@
   <img src="https://img.shields.io/badge/python-3.10+-yellow?style=flat-square" alt="Python">
   <img src="https://img.shields.io/badge/arXiv-papers-orange?style=flat-square" alt="arXiv">
   <img src="https://img.shields.io/badge/WeChat-公众号-07C160?style=flat-square" alt="WeChat">
-  <img src="https://img.shields.io/github/stars/GetIT-Sunday/SmearglePaper?style=social" alt="Stars">
+  <img src="https://img.shields.io/github/stars/GetIT-Sunday/Openmuse?style=social" alt="Stars">
 </p>
 
 <p align="center">
   <strong>中文</strong> | <a href="README_EN.md">English</a>
 </p>
 
+<p align="center">
+  <img src="docs/audits/harness-screenshots/136x51-initial.svg" alt="OpenMuse TUI initial screen" width="820">
+</p>
 ---
-
 ## ✨ 功能特性
 
-OpenMuse 是一个可扩展的 AIGC Harness，用模型、工具、记忆和 Pack 协同完成内容生产。当前的第一个官方 Pack 是 AutoWechat：把研究论文转成可发布的中文公众号文章。
+OpenMuse 是一个可扩展的 AIGC Harness，用模型、工具、记忆、Runtime 和 Pack 协同完成内容生产。当前的第一个官方 Pack 是 AutoWechat：把研究论文转成可发布的中文公众号文章。
 
 当前 Python 模块和 `smearglepaper` 命令作为兼容入口保留；新安装也提供 `openmuse` 命令。
+
+## 🧭 架构概览
+
+OpenMuse 把用户界面、可复用 Pack 和可恢复 Runtime 放在同一条执行链上。模型、Skills、Tools 和外部服务都是可替换的适配器；Manifest、Checkpoint、Artifact 和 Session 负责保留过程与结果。
+
+<p align="center">
+  <img src="assets/openmuse-architecture.png" alt="OpenMuse architecture" width="100%">
+</p>
+
+当前官方 Pack：`AutoWechat`。它运行在 OpenMuse Harness 之上，负责：
+
+```text
+论文或主题 → 选题 → 论文理解 → 中文文章 → 质量审阅 → 手机预览 → 可选微信草稿
+```
 
 <table>
   <tr>
@@ -83,10 +99,6 @@ OpenMuse 是一个可扩展的 AIGC Harness，用模型、工具、记忆和 Pac
   </tr>
 </table>
 
-<div align="right"><a href="#smearglepaper">↑ 返回顶部</a></div>
-
----
-
 ## 🚀 快速开始
 
 ### Agent 原生 Runtime（0.2）
@@ -94,44 +106,40 @@ OpenMuse 是一个可扩展的 AIGC Harness，用模型、工具、记忆和 Pac
 无参数启动 OpenCode 风格交互工作台；CLI、TUI 与 MCP 共用同一个可恢复 Runtime：
 
 ```bash
-smearglepaper
-smearglepaper run paper-to-article --paper-url https://arxiv.org/abs/1706.03762
-smearglepaper agent "解读这篇论文并生成公众号草稿" --paper-url https://arxiv.org/abs/1706.03762
-smearglepaper run paper-research --offline-example --workspace ./demo-workspace
-smearglepaper runs list --json
+openmuse
+openmuse run paper-to-article --paper-url https://arxiv.org/abs/1706.03762
+openmuse agent "解读这篇论文并生成公众号草稿" --paper-url https://arxiv.org/abs/1706.03762
+openmuse run paper-research --offline-example --workspace ./demo-workspace
+openmuse runs list --json
 ```
 
 TUI 以“论文或主题 → 候选确认 → 文章 → 对话修改 → 手机预览”为主流程。主题输入会展示 3 篇候选论文；粘贴论文链接会直接进入阅读与写作。文章完成后按 `Ctrl+O` 打开手机尺寸预览，后续修改会自动刷新。
 
-每次执行都会保存 `manifest.json`、顺序事件流、检查点与带哈希的 Artifact。真实微信写入默认禁用；使用 `--real` 后仍会停在审批门禁，需显式执行 `smearglepaper approve RUN_ID approve-publish`。详见 [CLI](docs/CLI.md) 与 [Runtime](docs/RUNTIME.md)。
+每次执行都会保存 `manifest.json`、顺序事件流、检查点与带哈希的 Artifact。真实微信写入默认禁用；使用 `--real` 后仍会停在审批门禁，需显式执行 `openmuse approve RUN_ID approve-publish`。详见 [CLI](docs/CLI.md) 与 [Runtime](docs/RUNTIME.md)。
 
 **① 一键运行完整流水线**
 
 ```bash
-smearglepaper agent-run --topic agents --days 30 --top-k 5
+openmuse agent-run --topic agents --days 30 --top-k 5
 ```
 
 **② 分步运行**
 
 ```bash
-smearglepaper preflight                                          # 检查环境
-smearglepaper collect --topic agents --days 30 --max-results 50 # 收集论文
-smearglepaper rank --top-k 5                                     # 排序论文
-smearglepaper write --paper-id 2401.00001                        # 生成文章
-smearglepaper review-article data/articles/2401.00001.md         # 审查文章
-smearglepaper improve-article data/articles/2401.00001.json      # 优化文章
+openmuse preflight                                          # 检查环境
+openmuse collect --topic agents --days 30 --max-results 50 # 收集论文
+openmuse rank --top-k 5                                     # 排序论文
+openmuse write --paper-id 2401.00001                        # 生成文章
+openmuse review-article data/articles/2401.00001.md         # 审查文章
+openmuse improve-article data/articles/2401.00001.json      # 优化文章
 ```
 
 **③ 论文深度解读 Agent**
 
 ```bash
-smearglepaper agent "解读这篇论文" --paper-url https://arxiv.org/abs/1706.03762
+openmuse agent "解读这篇论文" --paper-url https://arxiv.org/abs/1706.03762
 ```
-
-<div align="right"><a href="#smearglepaper">↑ 返回顶部</a></div>
-
 ---
-
 ## 📦 安装
 
 > **前置条件**：Python 3.10+，推荐使用 Conda
@@ -157,12 +165,10 @@ python -m pip install -e ".[dev]"
 
 ```bash
 # 验证安装
-smearglepaper preflight
+openmuse preflight
 ```
 
-<div align="right"><a href="#smearglepaper">↑ 返回顶部</a></div>
-
----
+旧的 `smearglepaper` 命令仍然兼容，可用于已有脚本和历史部署。
 
 ## 🛠️ CLI 命令
 
@@ -189,13 +195,9 @@ smearglepaper preflight
 
 **主题预设**：`latest_ai` · `agents` · `nlp` · `nlp_semantics` · `nlp_syntax` · `nlp_pragmatics`
 
-<div align="right"><a href="#smearglepaper">↑ 返回顶部</a></div>
-
----
-
 ## 🔧 MCP 服务
 
-SmearglePaper 可作为 MCP 服务器运行，与 AI Agent 无缝集成：
+OpenMuse 可作为 MCP 服务器运行，与 AI Agent 无缝集成：
 
 ```bash
 python -m mcp_server.server
@@ -220,11 +222,7 @@ python -m mcp_server.server
 详见 [docs/MCP.md](docs/MCP.md)。
 
 </details>
-
-<div align="right"><a href="#smearglepaper">↑ 返回顶部</a></div>
-
 ---
-
 ## ⚙️ 配置
 
 ```bash
@@ -244,11 +242,16 @@ WECHAT_APP_ID=your-app-id
 WECHAT_APP_SECRET=your-app-secret
 ```
 
-> 💡 未配置 LLM 时，SmearglePaper 使用本地模板兜底，仍可离线测试完整工作流。
+> 💡 未配置 LLM 时，OpenMuse 使用本地模板兜底，仍可离线测试完整工作流。
 
-<div align="right"><a href="#smearglepaper">↑ 返回顶部</a></div>
+## 📚 深入文档
 
----
+- [品牌边界与产品结构](docs/BRANDING.md)
+- [Harness 与 Skills/Pack](docs/AIGC_HARNESS_SKILLS.md)
+- [Runtime、断点恢复与审批](docs/RUNTIME.md)
+- [CLI 命令参考](docs/CLI.md)
+- [Pack 发布与 Registry](docs/PACK_PUBLISHING.md)
+- [MCP 集成](docs/MCP.md)
 
 ## 📁 项目结构
 
@@ -269,11 +272,7 @@ SmearglePaper/
 ├── prompts/                # LLM 提示词
 └── tests/                  # 测试
 ```
-
-<div align="right"><a href="#smearglepaper">↑ 返回顶部</a></div>
-
 ---
-
 ## 🧪 开发
 
 <details>
@@ -293,10 +292,6 @@ python -c 'import mcp_server.server; print("mcp import ok")'
 
 </details>
 
-<div align="right"><a href="#smearglepaper">↑ 返回顶部</a></div>
-
----
-
 ## 🤝 贡献
 
 欢迎所有形式的贡献！
@@ -307,34 +302,25 @@ python -c 'import mcp_server.server; print("mcp import ok")'
 4. 推送到分支（`git push origin feature/amazing-feature`）
 5. 创建 Pull Request
 
-<div align="right"><a href="#smearglepaper">↑ 返回顶部</a></div>
-
----
-
 ## 📄 许可证
 
 MIT License — 详见 [LICENSE](LICENSE)
-
 ---
-
 ## 🙏 致谢
 
 - [arXiv](https://arxiv.org/) — 论文来源
 - [DeepSeek](https://api.deepseek.com/) — LLM API
 - [WeChat Official Account API](https://developers.weixin.qq.com/) — 微信公众号接口
 
----
-
 <p align="center">
   <strong>⭐ 如果这个项目对你有帮助，请给个 Star 支持一下！</strong>
 </p>
-
-<p align="center">
-  <a href="https://star-history.com/#GetIT-Sunday/SmearglePaper&Date">
-    <img src="https://api.star-history.com/svg?repos=GetIT-Sunday/SmearglePaper&type=Date" alt="Star History Chart" width="600">
-  </a>
-</p>
-
 <p align="center">
   <sub>Made with ✨ by <a href="https://github.com/GetIT-Sunday">GetIT-Sunday</a> using <a href="https://github.com/GetIT-Sunday/ReadmeMagic-github-readme-design-skill">ReadmeMagic</a></sub>
+</p>
+---
+<p align="center">
+  <a href="https://star-history.com/#GetIT-Sunday/Openmuse&Date">
+    <img src="https://api.star-history.com/svg?repos=GetIT-Sunday/Openmuse&type=Date" alt="Star History Chart" width="600">
+  </a>
 </p>
