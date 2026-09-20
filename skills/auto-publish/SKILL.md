@@ -1,5 +1,7 @@
 ---
 name: auto-publish
+id: autowechat.auto-publish
+version: 0.1.0
 description: |
   End-to-end pipeline: collect papers, rank, select best, read PDF, generate article,
   review quality, improve, and publish to WeChat Official Account.

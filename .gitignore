@@ -3,10 +3,17 @@ workspace/
 memory/article_history.json
 __pycache__/
 .pytest_cache/
+.coverage
 .venv/
 .miniforge/
 .conda/
 *.egg-info/
+build/
 *.pyc
 .env
 .DS_Store
+.aigc/packs/
+.aigc/.staging/
+.aigc/cache/
+.aigc/keys/
+.aigc/enabled-packs.json

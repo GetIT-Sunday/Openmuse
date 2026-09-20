@@ -1,6 +1,10 @@
 ---
 name: write-paper-wechat
 description: Write, revise, or review evidence-grounded Chinese WeChat deep-read articles from research papers, parsed PDFs, arXiv links, figures, or existing drafts. Use for 论文解读、公众号深度文章、逐图讲论文、论文改写、论文排版、文章质量审查, or when turning academic evidence into a clear public-facing technical narrative.
+id: autowechat.write-paper-wechat
+version: 0.1.0
+requires:
+  - paper-deep-read
 ---
 
 # Write Paper WeChat

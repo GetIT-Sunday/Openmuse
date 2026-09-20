@@ -6,6 +6,7 @@ from smearglepaper.agents import check_agents
 from smearglepaper.config import DATA_DIR
 from smearglepaper.editor import improve_article_file
 from smearglepaper.models import PaperMeta
+from smearglepaper.runtime import AgentRuntime, RunRequest
 from smearglepaper.scout import run_scout_review
 from smearglepaper.storage import read_json
 from smearglepaper.workflow import SmearglePaperWorkflow
@@ -16,6 +17,76 @@ except ImportError as exc:  # pragma: no cover - exercised by preflight instead
     raise SystemExit("Install MCP support first: python -m pip install -r requirements.txt") from exc
 
 mcp = FastMCP("smearglepaper")
+
+
+@mcp.tool()
+def run_workflow(
+    workflow: str = "paper-to-article",
+    paper_url: str = "",
+    paper_id: str = "",
+    topic: str = "agents",
+    request: str = "",
+    workspace: str = "",
+    real: bool = False,
+) -> dict[str, object]:
+    """Start a durable workflow and immediately return its run_id. Real external writes still require approval."""
+    runtime = AgentRuntime(workspace or None)
+    result = runtime.start(
+        RunRequest(
+            workflow=workflow,
+            inputs={
+                key: value
+                for key, value in {
+                    "paper_url": paper_url,
+                    "paper_id": paper_id,
+                    "topic": topic,
+                    "request": request,
+                }.items()
+                if value
+            },
+            workspace=workspace or None,
+            dry_run=not real,
+        )
+    )
+    return result.to_dict()
+
+
+@mcp.tool()
+def get_run(run_id: str, workspace: str = "", include_events: bool = True) -> dict[str, object]:
+    """Get a durable run manifest and optionally its ordered event stream."""
+    return AgentRuntime(workspace or None).get_run(run_id, include_events=include_events)
+
+
+@mcp.tool()
+def list_runs(workspace: str = "") -> list[dict[str, object]]:
+    """List durable workflow runs."""
+    return AgentRuntime(workspace or None).list_runs()
+
+
+@mcp.tool()
+def resume_run(run_id: str, workspace: str = "") -> dict[str, object]:
+    """Resume a cancelled or failed durable run from verified artifacts."""
+    return AgentRuntime(workspace or None).resume(run_id).to_dict()
+
+
+@mcp.tool()
+def cancel_run(run_id: str, workspace: str = "") -> dict[str, object]:
+    """Cooperatively cancel a durable run before its next step."""
+    return AgentRuntime(workspace or None).cancel(run_id).to_dict()
+
+
+@mcp.tool()
+def resolve_approval(run_id: str, approval_id: str, approve: bool, workspace: str = "") -> dict[str, object]:
+    """Approve or reject a pending external side effect."""
+    runtime = AgentRuntime(workspace or None)
+    result = runtime.resolve_approval(run_id, approval_id, approve)
+    return runtime.resume(run_id).to_dict() if approve else result.to_dict()
+
+
+@mcp.tool()
+def list_artifacts(run_id: str, workspace: str = "") -> list[dict[str, object]]:
+    """List hash-verified artifacts belonging to a durable run."""
+    return AgentRuntime(workspace or None).list_artifacts(run_id)
 
 
 @mcp.tool()

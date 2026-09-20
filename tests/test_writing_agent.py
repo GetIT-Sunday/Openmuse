@@ -5,8 +5,8 @@ import unittest
 from pathlib import Path
 from unittest.mock import Mock, patch
 
-from smearglepaper.models import PaperMeta
 from smearglepaper.agent_reviews import technical_review, wechat_review
+from smearglepaper.models import PaperMeta
 from smearglepaper.storage import read_json
 from smearglepaper.writing_agent import PaperWritingAgent, _apply_guardrail_repairs, build_evidence_packet
 
@@ -123,24 +123,24 @@ class WritingAgentTests(unittest.TestCase):
             self.assertEqual(manifest["agent"], "Paper Writing Agent")
             self.assertEqual(writer._call_model.call_count, 3)
 
-    def test_agent_persists_failed_llm_stage(self) -> None:
+    def test_agent_falls_back_to_local_draft_when_llm_times_out(self) -> None:
         writer = Mock()
         writer._call_model.side_effect = RuntimeError("provider timeout")
 
         with tempfile.TemporaryDirectory() as tmp:
             data_dir = Path(tmp) / "data"
-            with (
-                patch("smearglepaper.writing_agent.DATA_DIR", data_dir),
-                self.assertRaisesRegex(RuntimeError, "provider timeout"),
-            ):
-                PaperWritingAgent(writer=writer, model_available=True).run(_paper(), _parsed())
+            with patch("smearglepaper.writing_agent.DATA_DIR", data_dir):
+                result = PaperWritingAgent(writer=writer, model_available=True).run(_paper(), _parsed())
 
             manifests = list((Path(tmp) / "workspace" / "paper_writing").glob("*/manifest.json"))
             self.assertEqual(len(manifests), 1)
             manifest = read_json(manifests[0], {})
-            self.assertEqual(manifest["status"], "failed")
-            self.assertEqual(manifest["active_stage"], "outline-planner")
-            self.assertEqual(manifest["error"]["type"], "RuntimeError")
+            self.assertEqual(result["status"], "needs_human_review")
+            self.assertEqual(manifest["status"], "needs_human_review")
+            self.assertFalse(manifest["model_available"])
+            self.assertEqual(manifest["model_fallbacks"][0]["stage"], "outline-planner")
+            self.assertEqual(manifest["model_fallbacks"][0]["message"], "provider timeout")
+            self.assertTrue(Path(str(result["final"]["article_json"])).is_file())
 
     def test_transformer_technical_review_flags_required_risks(self) -> None:
         paper = _paper()

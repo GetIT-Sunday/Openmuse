@@ -2,17 +2,56 @@ from __future__ import annotations
 
 import json
 import sys
+import urllib.request
+import uuid
+from collections.abc import Callable, Iterator
 from typing import Any
 from urllib.error import HTTPError
-import urllib.request
 
-from .config import env
 from .collector import ssl_context
+from .config import env
 from .evidence import format_evidence_context
 from .models import PaperMeta
 
+DEFAULT_LLM_USER_AGENT = (
+    "Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) "
+    "AppleWebKit/537.36 (KHTML, like Gecko) Chrome/138.0.0.0 Safari/537.36 "
+    "SmearglePaper/0.2"
+)
+_PROCESS_SESSION_ID = f"autowechat-{uuid.uuid4().hex}"
+
+
+def openai_request_headers(
+    api_key: str | None = None,
+    session_id: str | None = None,
+    base_url: str | None = None,
+) -> dict[str, str]:
+    """Headers for OpenAI-compatible gateways, including bot-filter compatibility."""
+    headers = {
+        "Content-Type": "application/json",
+        "Accept": "application/json",
+        "User-Agent": env("LLM_USER_AGENT", DEFAULT_LLM_USER_AGENT),
+    }
+    if api_key:
+        headers["Authorization"] = f"Bearer {api_key}"
+    endpoint = (base_url or env("OPENAI_BASE_URL")).lower()
+    if "opencode.ai/zen/go" in endpoint:
+        headers["x-opencode-session"] = session_id or env("OPENAI_SESSION_ID", _PROCESS_SESSION_ID)
+    return headers
+
 
 class ArticleWriter:
+    def __init__(self, model: str | None = None) -> None:
+        self.model = model
+        self.usage: dict[str, int | float | None] = {
+            "input_tokens": 0,
+            "output_tokens": 0,
+            "cost": None,
+        }
+
+    def reset_usage(self) -> None:
+        self.usage = {"input_tokens": 0, "output_tokens": 0, "cost": None}
+
     def write(self, paper: PaperMeta, parsed: dict[str, object] | None = None) -> str:
         context = build_context(paper, parsed)
         if _detect_api_provider() != "none":
@@ -27,6 +66,10 @@ class ArticleWriter:
                 )
         return self._write_locally(paper, context)
 
+    def write_local(self, paper: PaperMeta, parsed: dict[str, object] | None = None) -> str:
+        """Generate the deterministic local draft without contacting a provider."""
+        return self._write_locally(paper, build_context(paper, parsed))
+
     def _call_model(self, system: str, user: str, temperature: float) -> str:
         provider = _detect_api_provider()
         if provider == "anthropic":
@@ -37,7 +80,7 @@ class ArticleWriter:
         base = chat_completions_base_url(env("OPENAI_BASE_URL"))
         max_tokens = int(env("LLM_MAX_TOKENS", "8192"))
         payload = {
-            "model": env("OPENAI_MODEL", "deepseek-chat"),
+            "model": self.model or env("OPENAI_MODEL", "deepseek-chat"),
             "messages": [
                 {"role": "system", "content": system},
                 {"role": "user", "content": user},
@@ -48,17 +91,18 @@ class ArticleWriter:
         req = urllib.request.Request(
             f"{base}/chat/completions",
             data=json.dumps(payload).encode("utf-8"),
-            headers={"Authorization": f"Bearer {env('OPENAI_API_KEY')}", "Content-Type": "application/json"},
+            headers=openai_request_headers(env("OPENAI_API_KEY"), base_url=base),
             method="POST",
         )
-        with urllib.request.urlopen(req, timeout=60, context=ssl_context()) as response:
+        with urllib.request.urlopen(req, timeout=_llm_timeout(), context=ssl_context()) as response:
             data = json.loads(response.read().decode("utf-8"))
+        self._record_usage(data.get("usage", {}), "prompt_tokens", "completion_tokens")
         return data["choices"][0]["message"]["content"]
 
     def _call_anthropic(self, system: str, user: str, temperature: float) -> str:
         base_url = env("ANTHROPIC_BASE_URL").rstrip("/")
         payload = {
-            "model": env("ANTHROPIC_MODEL", "claude-sonnet-4-20250514"),
+            "model": self.model or env("ANTHROPIC_MODEL", "claude-sonnet-4-20250514"),
             "max_tokens": int(env("LLM_MAX_TOKENS", "8192")),
             "temperature": temperature,
             "system": system,
@@ -74,12 +118,19 @@ class ArticleWriter:
             },
             method="POST",
         )
-        with urllib.request.urlopen(req, timeout=240, context=ssl_context()) as response:
+        with urllib.request.urlopen(req, timeout=_llm_timeout(), context=ssl_context()) as response:
             data = json.loads(response.read().decode("utf-8"))
+        self._record_usage(data.get("usage", {}), "input_tokens", "output_tokens")
         for block in data.get("content", []):
             if block.get("type") == "text":
                 return block["text"]
         return ""
+
+    def _record_usage(self, usage: object, input_key: str, output_key: str) -> None:
+        if not isinstance(usage, dict):
+            return
+        self.usage["input_tokens"] = int(self.usage.get("input_tokens") or 0) + int(usage.get(input_key, 0) or 0)
+        self.usage["output_tokens"] = int(self.usage.get("output_tokens") or 0) + int(usage.get(output_key, 0) or 0)
 
     def _write_locally(self, paper: PaperMeta, context: str) -> str:
         authors = "、".join(paper.authors[:5]) or "作者未列出"
@@ -183,25 +234,82 @@ def check_llm_connection() -> dict[str, object]:
 
 
 def _check_openai() -> dict[str, object]:
-    base_url = env("OPENAI_BASE_URL")
-    api_key = env("OPENAI_API_KEY")
-    model = env("OPENAI_MODEL", "deepseek-chat")
-    payload = {"model": model, "messages": [{"role": "user", "content": "Return OK only."}], "max_tokens": 16}
+    return check_openai_connection(env("OPENAI_BASE_URL"), env("OPENAI_API_KEY"), env("OPENAI_MODEL", "deepseek-chat"))
+
+
+def check_openai_connection(
+    base_url: str,
+    api_key: str | None,
+    model: str,
+    session_id: str | None = None,
+) -> dict[str, object]:
+    """Check one OpenAI-compatible connection without changing global configuration."""
+    base_url = base_url.strip()
+    api_key = (api_key or "").strip()
+    model = model.strip() or "deepseek-chat"
+    payload = {"model": model, "messages": [{"role": "user", "content": "Return OK only."}], "max_tokens": 64}
     req = urllib.request.Request(
         f"{chat_completions_base_url(base_url)}/chat/completions",
         data=json.dumps(payload).encode("utf-8"),
-        headers={"Authorization": f"Bearer {api_key}", "Content-Type": "application/json"},
+        headers=openai_request_headers(api_key, session_id=session_id, base_url=base_url),
         method="POST",
     )
     try:
-        with urllib.request.urlopen(req, timeout=30, context=ssl_context()) as response:
+        # Connection checks should fail quickly; a stalled gateway must not
+        # make the whole TUI feel frozen.
+        with urllib.request.urlopen(req, timeout=10, context=ssl_context()) as response:
             data = json.loads(response.read().decode("utf-8"))
-        return {"ok": True, "provider": "openai", "model": model, "status": "connected", "sample": data.get("choices", [{}])[0].get("message", {}).get("content", "")[:80]}
+        message = data.get("choices", [{}])[0].get("message", {})
+        sample = message.get("content") or message.get("reasoning") or ""
+        return {"ok": True, "provider": "openai", "model": model, "status": "connected", "sample": sample[:80]}
     except HTTPError as exc:
         body = exc.read().decode("utf-8", errors="replace")
-        return {"ok": False, "provider": "openai", "model": model, "status_code": exc.code, "error": body[:500]}
+        return {
+            "ok": False,
+            "provider": "openai",
+            "model": model,
+            "status_code": exc.code,
+            "error": _connection_error_detail(body),
+        }
     except Exception as exc:
         return {"ok": False, "provider": "openai", "model": model, "error": f"{type(exc).__name__}: {exc}"}
+
+
+def _connection_error_detail(body: str) -> str:
+    """Extract a short, non-secret provider error suitable for the TUI."""
+    try:
+        payload = json.loads(body)
+    except json.JSONDecodeError:
+        payload = None
+    if isinstance(payload, dict):
+        error = payload.get("error", payload)
+        if isinstance(error, dict):
+            for key in ("message", "detail", "type", "code"):
+                value = error.get(key)
+                if value:
+                    return str(value)[:280]
+        if isinstance(error, str):
+            return error[:280]
+    compact = " ".join(body.split())
+    return compact[:280] or "服务端没有返回错误说明"
+
+
+def list_openai_models(base_url: str, api_key: str) -> list[str]:
+    """Return model ids from an OpenAI-compatible gateway."""
+    req = urllib.request.Request(
+        f"{chat_completions_base_url(base_url.strip())}/models",
+        headers=openai_request_headers(api_key.strip(), base_url=base_url),
+        method="GET",
+    )
+    with urllib.request.urlopen(req, timeout=30, context=ssl_context()) as response:
+        data = json.loads(response.read().decode("utf-8"))
+    models = data.get("data", []) if isinstance(data, dict) else []
+    result = {
+        str(item.get("id", "")).strip()
+        for item in models
+        if isinstance(item, dict) and str(item.get("id", "")).strip()
+    }
+    return sorted(result)
 
 
 def _check_anthropic() -> dict[str, object]:
@@ -285,6 +393,15 @@ def _detect_api_provider() -> str:
     return "none"
 
 
+def _llm_timeout(default: int = 60) -> int:
+    """Bound provider waits so a stalled request cannot hold a run for minutes."""
+    try:
+        configured = int(env("LLM_TIMEOUT_SECONDS", str(default)))
+    except ValueError:
+        configured = default
+    return max(5, min(configured, 300))
+
+
 def chat_with_tools(
     messages: list[dict[str, object]],
     tools: list[dict[str, object]],
@@ -306,6 +423,114 @@ def chat_with_tools(
         return _chat_openai(messages, tools, model, temperature, max_tokens)
     else:
         raise RuntimeError("No LLM configured. Set ANTHROPIC_API_KEY + ANTHROPIC_BASE_URL or OPENAI_API_KEY + OPENAI_BASE_URL.")
+
+
+def stream_chat(
+    messages: list[dict[str, object]],
+    *,
+    tools: list[dict[str, object]] | None = None,
+    model: str | None = None,
+    temperature: float = 0.3,
+    max_tokens: int = 4096,
+    on_delta: Callable[[str], None] | None = None,
+    session_id: str | None = None,
+    reasoning_effort: str = "default",
+) -> dict[str, object]:
+    """Stream a text turn from an OpenAI-compatible provider.
+
+    The gateway deliberately exposes a small provider-neutral contract. The
+    caller receives incremental text through ``on_delta`` and a final result
+    containing the accumulated content, usage and finish reason.
+    """
+    if _detect_api_provider() != "openai":
+        raise RuntimeError("Streaming currently requires an OpenAI-compatible provider.")
+    base = chat_completions_base_url(env("OPENAI_BASE_URL"))
+    payload: dict[str, object] = {
+        "model": model or env("OPENAI_MODEL", "deepseek-chat"),
+        "messages": messages,
+        "temperature": temperature,
+        "max_tokens": max_tokens,
+        "stream": True,
+        "stream_options": {"include_usage": True},
+    }
+    if tools:
+        payload["tools"] = tools
+        payload["tool_choice"] = "auto"
+    if reasoning_effort in {"low", "medium", "high"}:
+        payload["reasoning_effort"] = reasoning_effort
+    req = urllib.request.Request(
+        f"{base}/chat/completions",
+        data=json.dumps(payload).encode("utf-8"),
+        headers={
+            **openai_request_headers(env("OPENAI_API_KEY"), session_id=session_id, base_url=base),
+            "Accept": "text/event-stream",
+        },
+        method="POST",
+    )
+    content: list[str] = []
+    usage: dict[str, object] = {}
+    finish_reason = ""
+    tool_calls: dict[int, dict[str, object]] = {}
+    with urllib.request.urlopen(req, timeout=_llm_timeout(), context=ssl_context()) as response:
+        for event in _iter_sse_json(response):
+            choices = event.get("choices", [])
+            if choices:
+                choice = choices[0] if isinstance(choices[0], dict) else {}
+                delta = choice.get("delta", {})
+                text = delta.get("content") if isinstance(delta, dict) else None
+                if isinstance(text, str) and text:
+                    content.append(text)
+                    if on_delta:
+                        on_delta(text)
+                reason = choice.get("finish_reason")
+                if reason:
+                    finish_reason = str(reason)
+                raw_calls = choice.get("delta", {}).get("tool_calls", []) if isinstance(choice.get("delta", {}), dict) else []
+                for raw_call in raw_calls if isinstance(raw_calls, list) else []:
+                    if not isinstance(raw_call, dict):
+                        continue
+                    index = int(raw_call.get("index", 0))
+                    call = tool_calls.setdefault(index, {"id": "", "name": "", "arguments": ""})
+                    if raw_call.get("id"):
+                        call["id"] = str(raw_call["id"])
+                    function = raw_call.get("function", {})
+                    if isinstance(function, dict):
+                        if function.get("name"):
+                            call["name"] = str(function["name"])
+                        if function.get("arguments"):
+                            call["arguments"] = str(call["arguments"]) + str(function["arguments"])
+            if isinstance(event.get("usage"), dict):
+                usage = dict(event["usage"])
+    parsed_calls: list[dict[str, object]] = []
+    for call in tool_calls.values():
+        try:
+            arguments = json.loads(str(call["arguments"])) if call["arguments"] else {}
+        except json.JSONDecodeError:
+            arguments = {}
+        parsed_calls.append({"id": call["id"], "name": call["name"], "arguments": arguments})
+    return {
+        "content": "".join(content),
+        "usage": usage,
+        "finish_reason": finish_reason or "stop",
+        "tool_calls": parsed_calls,
+    }
+
+
+def _iter_sse_json(response: object) -> Iterator[dict[str, object]]:
+    """Yield JSON payloads from an SSE response, ignoring comments/keepalives."""
+    for raw in response:  # type: ignore[union-attr]
+        line = raw.decode("utf-8", errors="replace").strip()
+        if not line or line.startswith(":") or not line.startswith("data:"):
+            continue
+        payload = line[5:].strip()
+        if payload == "[DONE]":
+            return
+        try:
+            value = json.loads(payload)
+        except json.JSONDecodeError:
+            continue
+        if isinstance(value, dict):
+            yield value
 
 
 def _chat_openai(
@@ -331,10 +556,10 @@ def _chat_openai(
     req = urllib.request.Request(
         f"{base}/chat/completions",
         data=json.dumps(payload).encode("utf-8"),
-        headers={"Authorization": f"Bearer {api_key}", "Content-Type": "application/json"},
+        headers=openai_request_headers(api_key, base_url=base_url),
         method="POST",
     )
-    with urllib.request.urlopen(req, timeout=120, context=ssl_context()) as response:
+    with urllib.request.urlopen(req, timeout=_llm_timeout(), context=ssl_context()) as response:
         data = json.loads(response.read().decode("utf-8"))
 
     choice = data["choices"][0]
@@ -442,7 +667,7 @@ def _chat_anthropic(
         },
         method="POST",
     )
-    with urllib.request.urlopen(req, timeout=120, context=ssl_context()) as response:
+    with urllib.request.urlopen(req, timeout=_llm_timeout(), context=ssl_context()) as response:
         data = json.loads(response.read().decode("utf-8"))
 
     content_blocks = data.get("content", [])

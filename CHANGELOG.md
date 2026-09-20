@@ -1,5 +1,16 @@
 # Changelog
 
+## 0.2.0
+
+- Bound LLM waits and fall back to a local evidence draft instead of losing a paper-reading run on provider timeout.
+- Keep real WeChat creation blocked when a fallback draft has not passed the quality gate.
+- Added a durable Runtime shared by CLI, TUI, and MCP.
+- Added ordered event logs, hash-verified Artifacts, checkpoints, cancellation, retry, and resume.
+- Added explicit approval for real WeChat writes and dry-run defaults.
+- Replaced the TUI mock workflow executor with real Runtime events and session replay.
+- Added `run`, `runs`, `approve`, `artifacts`, and `config` automation commands.
+- Added Python 3.10-3.12 CI, Ruff, mypy, pre-commit, and Runtime documentation.
+
 ## 0.1.0
 
 - Initial SmearglePaper release.

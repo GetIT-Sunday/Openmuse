@@ -1,5 +1,7 @@
 ---
 name: paper-deep-read
+id: autowechat.paper-deep-read
+version: 0.1.0
 description: |
   Deep-read a specific AI paper: download PDF, parse text, extract figures,
   generate a structured Chinese article with LLM, review quality, and improve.

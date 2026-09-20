@@ -29,7 +29,7 @@ class WechatRenderer:
     blockquote {{ margin: 20px 0; padding: 10px 10px 10px 20px; background: #f4eeff; border-left: 3px solid #d89cf6; }}
     code {{ background: #f1f5f9; padding: 2px 4px; border-radius: 4px; }}
     strong {{ color: #916dd5; }}
-    img {{ display: block; max-width: 100%; height: auto; margin: 10px auto; border-radius: 8px; box-shadow: rgba(153,153,153,.3) 2px 4px 8px; }}
+    img {{ display:block; max-width:100%; height:auto; margin:10px auto; border-radius:8px; box-shadow:rgba(153,153,153,.3) 2px 4px 8px; }}
     li {{ margin: 7px 0; }}
     table {{ width: 100%; border-collapse: collapse; margin: 18px 0; font-size: 14px; }}
     th, td {{ border: 1px solid #dbe3ee; padding: 8px; text-align: left; }}
@@ -75,6 +75,12 @@ def basic_markdown(markdown: str) -> str:
             lines.append(f"<h1>{escaped[2:]}</h1>")
         elif escaped.startswith("## "):
             lines.append(f"<h2>{escaped[3:]}</h2>")
+        elif escaped.startswith("### "):
+            lines.append(f"<h3>{escaped[4:]}</h3>")
+        elif match := re.fullmatch(r"!\[([^]]*)\]\(([^)]+)\)", escaped.strip()):
+            lines.append(f'<img src="{match.group(2)}" alt="{match.group(1)}">')
+        elif match := re.fullmatch(r"\*([^*]+)\*", escaped.strip()):
+            lines.append(f"<p><em>{match.group(1)}</em></p>")
         elif escaped.startswith("- "):
             lines.append(f"<p>• {escaped[2:]}</p>")
         elif escaped.strip():

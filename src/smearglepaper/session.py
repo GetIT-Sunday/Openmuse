@@ -35,6 +35,7 @@ class Session:
     created_at: str
     updated_at: str
     messages: list[dict[str, object]] = field(default_factory=list)
+    run_ids: list[str] = field(default_factory=list)
 
     @staticmethod
     def create(title: str = "新对话") -> Session:
@@ -45,6 +46,7 @@ class Session:
             created_at=now,
             updated_at=now,
             messages=[],
+            run_ids=[],
         )
 
     def to_dict(self) -> dict[str, object]:
@@ -54,6 +56,7 @@ class Session:
             "created_at": self.created_at,
             "updated_at": self.updated_at,
             "messages": self.messages,
+            "run_ids": self.run_ids,
         }
 
     @staticmethod
@@ -64,6 +67,7 @@ class Session:
             created_at=str(data.get("created_at", "")),
             updated_at=str(data.get("updated_at", "")),
             messages=list(data.get("messages", [])),  # type: ignore[arg-type]
+            run_ids=[str(value) for value in data.get("run_ids", [])],
         )
 
     def touch(self) -> None:

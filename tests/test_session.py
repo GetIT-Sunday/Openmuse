@@ -84,7 +84,7 @@ class TUIAppTests(unittest.TestCase):
     def test_app_creates(self) -> None:
         from smearglepaper.tui import SmearglePaperApp
         app = SmearglePaperApp()
-        self.assertEqual(app.TITLE, "SmearglePaper Agent")
+        self.assertEqual(app.TITLE, "OpenMuse")
 
     def test_console_creates(self) -> None:
         from smearglepaper.tui import AgentConsole
