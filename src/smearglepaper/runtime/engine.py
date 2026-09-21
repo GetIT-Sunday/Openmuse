@@ -9,10 +9,14 @@ import time
 import uuid
 from collections.abc import Callable
 from contextlib import contextmanager
+from contextvars import copy_context
 from pathlib import Path
 from typing import Any
 from urllib.error import HTTPError, URLError
 
+from ..cancellation import CancellationToken, Cancelled, cancellation_scope, current_token
+from ..harness_events import EventJournal, HarnessEvent, normalize_event
+from ..turn_store import RecoveryRequired
 from ..workflow import SmearglePaperWorkflow
 from .config import resolve_workspace
 from .models import (
@@ -55,8 +59,15 @@ class AgentRuntime:
         self.registry = registry or build_registry()
         self.workflows = workflows or built_in_workflows()
         self._subscribers: dict[str, list[EventHandler]] = {}
+        self._session_journals: dict[str, EventJournal] = {}
         self._mutex = threading.RLock()
         self._threads: dict[str, threading.Thread] = {}
+        self._cancellations: dict[str, CancellationToken] = {}
+
+    def attach_event_journal(self, session_id: str, journal: EventJournal) -> None:
+        """Mirror normalized Runtime events into a session-wide event stream."""
+        with self._mutex:
+            self._session_journals[session_id] = journal
 
     def create_run(self, request: RunRequest, *, session_id: str | None = None) -> RunResult:
         if request.workflow not in self.workflows:
@@ -118,23 +129,37 @@ class AgentRuntime:
         created = self.create_run(request, session_id=session_id)
         if event_handler:
             self.subscribe(created.run_id, event_handler)
-        thread = threading.Thread(target=self.execute, args=(created.run_id,), daemon=True, name=f"smearglepaper-{created.run_id}")
+        parent_context = copy_context()
+        thread = threading.Thread(target=parent_context.run, args=(self.execute, created.run_id), daemon=True, name=f"smearglepaper-{created.run_id}")
         self._threads[created.run_id] = thread
         thread.start()
         return created
 
-    def execute(self, run_id: str) -> RunResult:
+    def execute(self, run_id: str, *, _resuming: bool = False) -> RunResult:
         with self.store.execution_lock(run_id):
             manifest = self.store.load(run_id)
+            if _resuming:
+                if (manifest["status"] == RunStatus.WAITING_INPUT.value
+                        and (manifest.get("interaction") or {}).get("status") == "pending"):
+                    return self.result(run_id)
+                if (manifest["status"] == RunStatus.WAITING_APPROVAL.value
+                        and any(a.get("status") == "pending" for a in manifest.get("approvals", {}).values())):
+                    return self.result(run_id)
+                manifest["cancel_requested"] = False
             request = RunRequest.from_dict(dict(manifest["request"]))
             definition = self.workflows[str(manifest["workflow"])]
             if manifest["status"] == RunStatus.COMPLETED.value:
+                return self.result(run_id)
+            if self._uncertain_effect(manifest):
+                self._require_recovery(manifest)
                 return self.result(run_id)
             manifest["cancel_requested"] = False if manifest["status"] == RunStatus.CANCELLED.value else manifest.get("cancel_requested", False)
             self._set_run_status(manifest, RunStatus.RUNNING, ["Wait for workflow completion"])
             self._emit(manifest, "main", "run.started", {"workflow": definition.id})
             outputs = self._load_outputs(run_id, definition)
             active_agent = ""
+            token = CancellationToken(parent=current_token())
+            self._cancellations[run_id] = token
             try:
                 for definition_step in definition.steps:
                     manifest = self.store.load(run_id)
@@ -144,6 +169,7 @@ class AgentRuntime:
                         self._set_run_status(manifest, RunStatus.CANCELLED, [f"Resume run {run_id}"])
                         self._emit(manifest, active_agent or "main", "run.status_changed", {"status": RunStatus.CANCELLED.value})
                         return self.result(run_id)
+                    token.check()
 
                     if definition_step.condition and not definition_step.condition(request):
                         step["status"] = StepStatus.SKIPPED.value
@@ -154,9 +180,20 @@ class AgentRuntime:
 
                     input_hash = self._input_hash(request, definition_step, manifest)
                     if self._can_resume(step, input_hash, manifest):
-                        outputs[definition_step.id] = self.store.load_checkpoint(run_id, definition_step.id).get("output", {})
+                        checkpoint = self.store.load_checkpoint(run_id, definition_step.id)
+                        outputs[definition_step.id] = checkpoint.get("output", {})
+                        if checkpoint.get("interaction") and (manifest.get("interaction") or {}).get("status") != "resolved":
+                            self._wait_for_interaction(manifest, definition_step, checkpoint["interaction"])
+                            return self.result(run_id)
                         self._emit(manifest, definition_step.agent, "step.completed", {"step": definition_step.id, "status": "cached"})
                         continue
+
+                    spec, _ = self.registry.get(definition_step.tool)
+                    if (step.get("external_effect") == "completed" and spec.side_effect
+                            and (spec.approval != "real" or not request.dry_run)):
+                        step["external_effect"] = "unknown"
+                        self.store.save(run_id, manifest)
+                        raise RecoveryRequired("已执行的外部操作无法验证本地凭据；禁止自动重复执行。")
 
                     if definition_step.approval == "real" and not request.dry_run:
                         approval_id = f"approve-{definition_step.id}"
@@ -193,26 +230,30 @@ class AgentRuntime:
                     outputs[definition_step.id] = outcome.output
                     if outcome.interaction:
                         manifest = self.store.load(run_id)
-                        interaction = {
-                            **outcome.interaction,
-                            "id": f"interaction-{definition_step.id}",
-                            "step": definition_step.id,
-                            "status": "pending",
-                            "selected_id": None,
-                            "requested_at": utc_now(),
-                        }
-                        manifest["interaction"] = interaction
-                        self._set_run_status(manifest, RunStatus.WAITING_INPUT, ["选择一篇论文继续"])
-                        self._emit(manifest, definition_step.agent, "interaction.required", interaction)
+                        self._wait_for_interaction(manifest, definition_step, outcome.interaction)
                         return self.result(run_id)
 
                 if active_agent:
                     self._emit(manifest, active_agent, "agent.completed", {"agent": active_agent})
                 manifest = self.store.load(run_id)
+                if manifest.get("cancel_requested"):
+                    token.cancel()
+                token.check()
                 manifest["revision_backup"] = []
                 manifest["fallback_revision_active"] = False
                 self._set_run_status(manifest, RunStatus.COMPLETED, ["Inspect generated artifacts"])
                 self._emit(manifest, "main", "run.completed", {"status": RunStatus.COMPLETED.value})
+            except RecoveryRequired:
+                manifest = self.store.load(run_id)
+                self._require_recovery(manifest)
+            except Cancelled:
+                manifest = self.store.load(run_id)
+                for step in manifest["steps"]:
+                    if step["status"] in {StepStatus.RUNNING.value, StepStatus.RETRYING.value}:
+                        step["status"] = StepStatus.PENDING.value
+                self._restore_revision_backup(manifest)
+                self._set_run_status(manifest, RunStatus.CANCELLED, [f"Resume run {run_id}"])
+                self._emit(manifest, active_agent or "main", "run.cancelled", {"reason": "cancelled"})
             except QualityGateError as exc:
                 manifest = self.store.load(run_id)
                 self._restore_revision_backup(manifest)
@@ -232,24 +273,34 @@ class AgentRuntime:
                     "run.failed",
                     {"error": str(exc), "code": manifest["failure_code"]},
                 )
+            finally:
+                self._cancellations.pop(run_id, None)
             return self.result(run_id)
 
     def resume(self, run_id: str) -> RunResult:
-        manifest = self.store.load(run_id)
-        if manifest["status"] == RunStatus.WAITING_INPUT.value:
-            interaction = manifest.get("interaction") or {}
-            if interaction.get("status") == "pending":
-                return self.result(run_id)
-        if manifest["status"] == RunStatus.WAITING_APPROVAL.value:
-            pending = [item for item in manifest.get("approvals", {}).values() if item.get("status") == "pending"]
-            if pending:
-                return self.result(run_id)
-        manifest["cancel_requested"] = False
-        self.store.save(run_id, manifest)
-        return self.execute(run_id)
+        # Reset cancellation only while holding the execution lease. A second
+        # process must not overwrite a live worker's write-ahead marker.
+        return self.execute(run_id, _resuming=True)
+
+    def _wait_for_interaction(self, manifest: dict[str, Any], step: Any, value: dict[str, Any]) -> None:
+        interaction = {**value, "id": f"interaction-{step.id}", "step": step.id,
+                       "status": "pending", "selected_id": None, "requested_at": utc_now()}
+        manifest["interaction"] = interaction
+        self._set_run_status(manifest, RunStatus.WAITING_INPUT, ["选择一篇论文继续"])
+        self._emit(manifest, step.agent, "interaction.required", interaction)
 
     def retry(self, run_id: str, step_id: str | None = None) -> RunResult:
+        with self.store.execution_lock(run_id):
+            result = self._prepare_retry(run_id, step_id)
+            if result:
+                return result
+        return self.execute(run_id)
+
+    def _prepare_retry(self, run_id: str, step_id: str | None) -> RunResult | None:
         manifest = self.store.load(run_id)
+        if self._uncertain_effect(manifest):
+            self._require_recovery(manifest)
+            return self.result(run_id)
         definition = self.workflows[str(manifest["workflow"])]
         target = step_id or next((item["id"] for item in manifest["steps"] if item["status"] == StepStatus.FAILED.value), None)
         if not target:
@@ -258,6 +309,12 @@ class AgentRuntime:
         if target not in ids:
             raise RuntimeErrorCode(f"Unknown step: {target}", 2)
         start = ids.index(target)
+        request = RunRequest.from_dict(manifest["request"])
+        for item in manifest["steps"][start:]:
+            spec, _ = self.registry.get(str(item["tool"]))
+            if (item.get("external_effect") == "completed" and spec.side_effect
+                    and (spec.approval != "real" or not request.dry_run)):
+                raise RuntimeErrorCode("此步骤已完成外部写入，不能重放；如需新的操作，请新建任务并重新审批。", 2)
         stale_producers = set(ids[start:])
         for item in manifest["steps"][start:]:
             item.update({"status": StepStatus.PENDING.value, "error": None, "completed_at": None, "input_hash": None, "artifacts": []})
@@ -267,16 +324,23 @@ class AgentRuntime:
         manifest["status"] = RunStatus.PENDING.value
         manifest["failure_code"] = None
         self.store.save(run_id, manifest)
-        return self.execute(run_id)
+        return None
 
     def cancel(self, run_id: str) -> RunResult:
         manifest = self.store.load(run_id)
-        if manifest["status"] in {RunStatus.COMPLETED.value, RunStatus.FAILED.value, RunStatus.CANCELLED.value}:
+        if manifest["status"] in {RunStatus.COMPLETED.value, RunStatus.FAILED.value, RunStatus.CANCELLED.value, RunStatus.RECOVERY_REQUIRED.value}:
             return self.result(run_id)
+        token = self._cancellations.get(run_id)
         manifest["cancel_requested"] = True
         manifest["status"] = RunStatus.CANCELLING.value
         self.store.save(run_id, manifest)
-        self._emit(manifest, "main", "run.status_changed", {"status": RunStatus.CANCELLING.value})
+        try:
+            self._emit(manifest, "main", "run.status_changed", {"status": RunStatus.CANCELLING.value})
+        finally:
+            # Publish the request before waking a cooperative worker: it may
+            # immediately persist its terminal state when the token is signalled.
+            if token:
+                token.cancel()
         return self.result(run_id)
 
     def resolve_approval(self, run_id: str, approval_id: str, approve: bool) -> RunResult:
@@ -295,7 +359,7 @@ class AgentRuntime:
         self._emit(manifest, str(step["agent"]), "approval.resolved", dict(approval))
         return self.result(run_id)
 
-    def resolve_interaction(self, run_id: str, selected_id: str) -> RunResult:
+    def resolve_interaction(self, run_id: str, selected_id: str, *, operation_id: str = "") -> RunResult:
         manifest = self.store.load(run_id)
         interaction = manifest.get("interaction")
         if not isinstance(interaction, dict) or interaction.get("status") != "pending":
@@ -310,6 +374,8 @@ class AgentRuntime:
         request = dict(manifest["request"])
         inputs = dict(request.get("inputs", {}))
         inputs["paper_id"] = selected_id
+        if operation_id:
+            inputs["_operation_id"] = operation_id
         request["inputs"] = inputs
         manifest["request"] = request
         interaction.update(
@@ -326,16 +392,62 @@ class AgentRuntime:
         self._emit(manifest, "scout", "interaction.resolved", dict(interaction))
         return self.result(run_id)
 
-    def update_inputs(self, run_id: str, updates: dict[str, Any], *, restart_step: str = "write") -> RunResult:
+    def prepare_article(self, run_id: str, *, model: str | None = None,
+                        inputs: dict[str, Any] | None = None) -> RunResult:
+        """Extend completed research without re-running trusted research steps."""
+        with self.store.execution_lock(run_id):
+            manifest = self.store.load(run_id)
+            if manifest["workflow"] != "paper-research" or manifest["status"] != RunStatus.COMPLETED.value:
+                raise RuntimeErrorCode("请先完成论文研究；已有文章请使用修订操作。", 2)
+            if any(not self.store.verify_artifact(item) for item in manifest.get("artifacts", []) if item.get("status") != "stale"):
+                raise RuntimeErrorCode("研究产物缺失或已被修改，请先恢复研究材料。", 2)
+            manifest["workflow"] = "paper-to-article"
+            manifest["request"].update(workflow="paper-to-article", dry_run=True)
+            manifest["request"]["inputs"].update(inputs or {})
+            if model:
+                manifest["request"]["model"] = model
+            request = RunRequest.from_dict(manifest["request"])
+            existing = {item["id"]: item for item in manifest["steps"]}
+            for definition in self.workflows["paper-to-article"].steps:
+                if definition.id in existing:
+                    # The workflow name/model is part of the cache key, but
+                    # neither changes the already verified research outputs.
+                    existing[definition.id]["input_hash"] = self._input_hash(request, definition, manifest)
+                else:
+                    manifest["steps"].append({"id": definition.id, "tool": definition.tool,
+                        "agent": definition.agent, "status": StepStatus.PENDING.value,
+                        "attempts": 0, "input_hash": None, "artifacts": [], "error": None,
+                        "started_at": None, "completed_at": None})
+            manifest["cancel_requested"] = False
+            self._set_run_status(manifest, RunStatus.PENDING, ["使用已确认的论文证据撰写文章"])
+        return self.result(run_id)
+
+    def update_inputs(self, run_id: str, updates: dict[str, Any], *, restart_step: str = "write",
+                      model: str | None = None, dry_run: bool | None = None) -> RunResult:
         manifest = self.store.load(run_id)
+        if self._uncertain_effect(manifest):
+            raise RecoveryRequired("外部写入结果尚未核对，不能通过修订或更新输入跳过恢复检查。")
+        previous_request = RunRequest.from_dict(manifest["request"])
         request = dict(manifest["request"])
         request_inputs = dict(request.get("inputs", {}))
         request_inputs.update(updates)
         request["inputs"] = request_inputs
+        if model:
+            request["model"] = model
+        if dry_run is not None:
+            request["dry_run"] = dry_run
         manifest["request"] = request
         definition = self.workflows[str(manifest["workflow"])]
         ids = [step.id for step in definition.steps]
         start = ids.index(restart_step) if restart_step in ids else 0
+        if model and model != previous_request.model:
+            # Model selection only affects the steps being restarted. Preserve
+            # cache keys for verified upstream work, not changed input values.
+            previous_request.model = model
+            for definition_step in definition.steps[:start]:
+                item = _step(manifest, definition_step.id)
+                if item["status"] == StepStatus.COMPLETED.value:
+                    item["input_hash"] = self._input_hash(previous_request, definition_step, manifest)
         stale_producers = set(ids[start:])
         if "choose" in ids and start <= ids.index("choose"):
             manifest["interaction"] = None
@@ -391,6 +503,10 @@ class AgentRuntime:
     def events(self, run_id: str, after: int = 0) -> list[RunEvent]:
         return self.store.events(run_id, after)
 
+    def harness_events(self, run_id: str, after: int = 0) -> list[HarnessEvent]:
+        """Return runtime history through the shared Harness event contract."""
+        return [normalize_event(event) for event in self.store.events(run_id, after)]
+
     def subscribe(self, run_id: str, handler: EventHandler) -> Callable[[], None]:
         with self._mutex:
             self._subscribers.setdefault(run_id, []).append(handler)
@@ -432,6 +548,10 @@ class AgentRuntime:
         step["artifacts"] = []
         self.store.save(run_id, manifest)
         for attempt in range(attempts):
+            token = self._cancellations.get(run_id) or CancellationToken(parent=current_token())
+            if self.store.load(run_id).get("cancel_requested"):
+                token.cancel()
+            token.check()
             step["status"] = StepStatus.RUNNING.value if attempt == 0 else StepStatus.RETRYING.value
             step["attempts"] = int(step.get("attempts", 0)) + 1
             step["started_at"] = step.get("started_at") or utc_now()
@@ -462,9 +582,15 @@ class AgentRuntime:
                     run_dir=self.store.run_dir(run_id),
                     emit=emit_tool_event,
                     workflow=self.workflow,
+                    cancellation=token,
                 )
-                with _workspace_data_context(self.workspace):
+                external = spec.side_effect and (spec.approval != "real" or not request.dry_run)
+                if external:
+                    step["external_effect"] = "started"
+                    self.store.save(run_id, manifest)
+                with cancellation_scope(token), _workspace_data_context(self.workspace):
                     outcome = handler(context)
+                    token.check()
                 artifact_records = []
                 path_map: dict[str, str] = {}
                 dependency_ids = [artifact["id"] for artifact in manifest.get("artifacts", []) if artifact.get("producer") in definition_step.dependencies and artifact.get("status") != "stale"]
@@ -481,6 +607,7 @@ class AgentRuntime:
                     "input_hash": input_hash,
                     "output": outcome.output,
                     "quality": outcome.quality,
+                    "interaction": outcome.interaction,
                     "completed_at": utc_now(),
                 }
                 checkpoint_path = self.store.checkpoint(run_id, definition_step.id, checkpoint)
@@ -491,6 +618,8 @@ class AgentRuntime:
                 manifest["artifacts"].extend(records)
                 step["artifacts"] = [record["id"] for record in records]
                 step["status"] = StepStatus.COMPLETED.value
+                if external:
+                    step["external_effect"] = "completed"
                 step["completed_at"] = utc_now()
                 step["duration_seconds"] = round(time.monotonic() - started, 3)
                 if outcome.quality:
@@ -518,14 +647,22 @@ class AgentRuntime:
                 )
                 self._emit(manifest, definition_step.agent, "step.completed", {"step": definition_step.id, "message": outcome.message})
                 return outcome
+            except Cancelled:
+                if self._uncertain_effect(self.store.load(run_id)):
+                    raise RecoveryRequired("取消时外部写入的结果未知，请先核对远端结果。") from None
+                raise
             except Exception as exc:
+                if self._uncertain_effect(self.store.load(run_id)):
+                    raise RecoveryRequired("外部写入未获得可靠完成记录，请先核对远端结果。") from exc
+                token.check()
                 manifest = self.store.load(run_id)
                 step = _step(manifest, definition_step.id)
                 step["error"] = {"type": type(exc).__name__, "message": str(exc), "retryable": bool(spec.retryable)}
                 self.store.save(run_id, manifest)
                 self._emit(manifest, definition_step.agent, "tool.failed", {"step": definition_step.id, "tool": spec.name, "error": str(exc)})
                 if attempt + 1 < attempts and spec.retryable:
-                    time.sleep(min(0.25 * (2**attempt), 2.0))
+                    token.wait(min(0.25 * (2**attempt), 2.0))
+                    token.check()
                     continue
                 step["status"] = StepStatus.FAILED.value
                 step["completed_at"] = utc_now()
@@ -533,6 +670,57 @@ class AgentRuntime:
                 self._emit(manifest, definition_step.agent, "step.failed", {"step": definition_step.id, "error": str(exc)})
                 raise
         raise AssertionError("unreachable")
+
+    def _uncertain_effect(self, manifest: dict[str, Any]) -> dict[str, Any] | None:
+        request = RunRequest.from_dict(manifest["request"])
+        for step in manifest["steps"]:
+            spec, _ = self.registry.get(str(step["tool"]))
+            if not spec.side_effect or (spec.approval == "real" and request.dry_run):
+                continue
+            if step.get("external_effect") in {"started", "unknown"} or (
+                step.get("external_effect") is None and step["status"] in {"running", "retrying"}
+            ):
+                return step
+        return None
+
+    def _require_recovery(self, manifest: dict[str, Any]) -> None:
+        step = self._uncertain_effect(manifest)
+        if step is None:
+            return
+        step["external_effect"] = "unknown"
+        manifest["recovery"] = {"kind": "external_result_unknown", "step": step["id"],
+            "message": "外部写入结果未知。请先在微信草稿箱或目标服务核对，禁止自动重试。"}
+        self._set_run_status(manifest, RunStatus.RECOVERY_REQUIRED, [manifest["recovery"]["message"]])
+        self._emit(manifest, str(step["agent"]), "run.recovery_required", dict(manifest["recovery"]))
+
+    def reconcile_external(self, run_id: str, *, executed: bool, external_id: str = "") -> RunResult:
+        """Explicit human reconciliation only; never exposed as an LLM tool."""
+        with self.store.execution_lock(run_id):
+            manifest = self.store.load(run_id)
+            step = self._uncertain_effect(manifest)
+            if step is None:
+                raise RuntimeErrorCode("没有等待核对的外部写入。", 2)
+            if executed:
+                if not external_id.strip():
+                    raise RuntimeErrorCode("确认已执行时必须提供远端草稿或结果 ID。", 2)
+                output = {"external_id": external_id, "draft": {"media_id": external_id}, "reconciled": True}
+                checkpoint = self.store.checkpoint(run_id, str(step["id"]), {"output": output, "input_hash": step.get("input_hash"), "reconciled": True})
+                old_ids = set(step.get("artifacts", []))
+                for artifact in manifest.get("artifacts", []):
+                    if artifact.get("id") in old_ids:
+                        artifact["status"] = "stale"
+                receipt = self.store.add_artifact(run_id, checkpoint, str(step["id"]))
+                manifest["artifacts"].append(receipt.to_dict())
+                step["artifacts"] = [receipt.id]
+                step.update(status=StepStatus.COMPLETED.value, external_effect="completed", completed_at=utc_now())
+            else:
+                step.update(status=StepStatus.PENDING.value, external_effect="not_executed")
+                manifest.get("approvals", {}).pop(f"approve-{step['id']}", None)
+            manifest["recovery"] = None
+            manifest["cancel_requested"] = False
+            self._set_run_status(manifest, RunStatus.PENDING, ["已记录人工核对结果，可以显式继续任务。"])
+            self._emit(manifest, str(step["agent"]), "run.reconciled", {"executed": executed, "external_id": external_id})
+        return self.result(run_id)
 
     def _emit(self, manifest: dict[str, Any], agent_id: str, event_type: str, payload: dict[str, Any]) -> RunEvent:
         with self._mutex:
@@ -550,6 +738,9 @@ class AgentRuntime:
             )
             self.store.append_event(event)
             self.store.save(str(latest["run_id"]), latest)
+            journal = self._session_journals.get(str(latest["session_id"]))
+            if journal:
+                journal.append(event.to_harness_event())
             manifest.update(latest)
             handlers = list(self._subscribers.get(event.run_id, []))
         for handler in handlers:
@@ -594,6 +785,8 @@ class AgentRuntime:
 
     def _can_resume(self, step: dict[str, Any], input_hash: str, manifest: dict[str, Any]) -> bool:
         if step.get("status") != StepStatus.COMPLETED.value or step.get("input_hash") != input_hash:
+            return False
+        if not self.store.load_checkpoint(str(manifest["run_id"]), str(step["id"])):
             return False
         ids = set(step.get("artifacts", []))
         if not ids:

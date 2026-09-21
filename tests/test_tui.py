@@ -185,10 +185,11 @@ class TUIAppTests(unittest.TestCase):
         self.assertFalse(screen._busy)
         self.assertTrue(screen._context_visible)
 
-    def test_unified_input_routes_topic_and_paper_without_commands(self) -> None:
-        screen = AgentConsole()
-        topic_workflow, topic_inputs = screen._runtime_request("多智能体协作")
-        paper_workflow, paper_inputs = screen._runtime_request("解读 https://arxiv.org/abs/2607.10001")
+    def test_explicit_offline_parser_preserves_topic_and_paper(self) -> None:
+        from smearglepaper.conversation import offline_request
+
+        topic_workflow, topic_inputs = offline_request("多智能体协作")
+        paper_workflow, paper_inputs = offline_request("解读 https://arxiv.org/abs/2607.10001")
         self.assertEqual(topic_workflow, "paper-to-article")
         self.assertEqual(topic_inputs["candidate_count"], 3)
         self.assertEqual(topic_inputs["ranking_profile"], "balanced")
@@ -367,7 +368,10 @@ class TUIAppTests(unittest.TestCase):
                 screen._begin_streaming_agent()
                 screen._append_stream_delta("正在生成")
                 self.assertTrue(screen._stream_render_pending)
-                await pilot.pause(0.08)
+                for _ in range(10):
+                    await pilot.pause(0.05)
+                    if not screen._stream_render_pending:
+                        break
                 self.assertFalse(screen._stream_render_pending)
                 self.assertEqual(screen._streaming_message.content, "正在生成")
 
@@ -443,7 +447,7 @@ class TUIAppTests(unittest.TestCase):
 
         asyncio.run(exercise())
 
-    def test_candidate_list_accepts_natural_language_number_selection(self) -> None:
+    def test_candidate_list_accepts_explicit_keyboard_selection(self) -> None:
         async def exercise() -> None:
             app = SmearglePaperApp()
             async with app.run_test(size=(136, 51)) as pilot:
@@ -475,7 +479,10 @@ class TUIAppTests(unittest.TestCase):
                 await pilot.pause()
                 self.assertEqual(len(screen.query_one("#stage-candidates", ListView).children), 3)
                 with patch.object(screen, "_choose_candidate") as choose:
-                    screen._handle_candidate_input("选第二篇")
+                    candidates = screen.query_one("#stage-candidates", ListView)
+                    candidates.index = 1
+                    candidates.focus()
+                    await pilot.press("enter")
                 choose.assert_called_once_with("2607.10002", "Candidate 2")
 
         import asyncio
@@ -492,7 +499,7 @@ class TUIAppTests(unittest.TestCase):
                     screen.runtime = __import__(
                         "smearglepaper.runtime", fromlist=["AgentRuntime"]
                     ).AgentRuntime(Path(tmp))
-                    screen._handle_user_input("解读离线示例论文")
+                    screen._handle_user_input("/offline 解读离线示例论文")
                     for _ in range(200):
                         await pilot.pause()
                         if not screen._busy and screen._active_run_id:

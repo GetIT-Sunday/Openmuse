@@ -14,6 +14,7 @@ from .agent_reviews import (
     wechat_review,
 )
 from .config import DATA_DIR
+from .cancellation import Cancelled
 from .cover import create_cover
 from .evidence import format_evidence_context
 from .figures import place_visuals
@@ -105,6 +106,8 @@ class PaperWritingAgent:
             persist(active_stage)
             try:
                 return self.writer._call_model(system, prompt, temperature=temperature)
+            except Cancelled:
+                raise
             except Exception as exc:
                 self.model_available = False
                 run_state["model_available"] = False

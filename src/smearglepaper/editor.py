@@ -5,6 +5,7 @@ from pathlib import Path
 from urllib.error import URLError
 
 from .config import DATA_DIR
+from .cancellation import Cancelled
 from .evidence import format_evidence_context
 from .llm import ArticleWriter, _detect_api_provider, format_visual_evidence
 from .figures import place_figures, place_visuals
@@ -69,6 +70,8 @@ def improve_markdown(article: Article, markdown: str, review: dict[str, object],
         )
     except URLError as exc:
         raise RuntimeError(f"Could not reach LLM endpoint: {exc.reason}") from exc
+    except Cancelled:
+        raise
     except Exception as exc:  # noqa: BLE001 - surfaced as a concise CLI/MCP diagnostic
         raise RuntimeError(f"Article improvement failed: {type(exc).__name__}: {exc}") from exc
 

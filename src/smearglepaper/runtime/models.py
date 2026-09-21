@@ -9,6 +9,9 @@ from dataclasses import dataclass, field
 from pathlib import Path
 from typing import Any
 
+from ..cancellation import CancellationToken
+from ..harness_events import HarnessEvent
+
 
 def utc_now() -> str:
     return dt.datetime.now(dt.timezone.utc).isoformat()
@@ -19,6 +22,7 @@ class RunStatus(str, enum.Enum):
     RUNNING = "running"
     WAITING_APPROVAL = "waiting_approval"
     WAITING_INPUT = "waiting_input"
+    RECOVERY_REQUIRED = "recovery_required"
     CANCELLING = "cancelling"
     CANCELLED = "cancelled"
     FAILED = "failed"
@@ -84,6 +88,8 @@ class RunEvent:
     sequence: int
     timestamp: str
     payload: dict[str, Any] = field(default_factory=dict)
+    turn_id: str = ""
+    source: str = "runtime"
 
     @classmethod
     def create(
@@ -104,6 +110,22 @@ class RunEvent:
             sequence=sequence,
             timestamp=utc_now(),
             payload=payload or {},
+            turn_id=f"run:{run_id}",
+            source="runtime",
+        )
+
+    def to_harness_event(self) -> HarnessEvent:
+        return HarnessEvent(
+            type=self.type,
+            session_id=self.session_id,
+            turn_id=self.turn_id or f"run:{self.run_id}",
+            sequence=self.sequence,
+            source=self.source or "runtime",
+            payload=dict(self.payload),
+            timestamp=self.timestamp,
+            id=self.id,
+            run_id=self.run_id,
+            agent_id=self.agent_id,
         )
 
     def to_dict(self) -> dict[str, Any]:
@@ -193,3 +215,4 @@ class ToolContext:
     run_dir: Path
     emit: Callable[[str, dict[str, Any] | None], None]
     workflow: Any
+    cancellation: CancellationToken | None = None

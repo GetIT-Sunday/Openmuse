@@ -7,7 +7,7 @@ from pathlib import Path
 
 from .agents import AGENTS, check_agents
 from .collector import ArxivRateLimitError, ArxivTemporaryError, topic_names
-from .config import DATA_DIR, runtime_settings
+from .config import DATA_DIR, RESOURCE_ROOT, ROOT_DIR, runtime_settings
 from .editor import improve_article_file
 from .llm import check_llm_connection
 from .models import PaperMeta
@@ -16,7 +16,7 @@ from .storage import read_json
 from .wechat import WechatClient
 from .workflow import SmearglePaperWorkflow
 
-PROJECT_ROOT = Path(__file__).resolve().parents[2]
+PROJECT_ROOT = ROOT_DIR
 
 # Old name → new name (deprecated aliases)
 _ALIASES: dict[str, str] = {
@@ -46,7 +46,10 @@ def _add_alias(sub: argparse._SubParsersAction, old_name: str, new_name: str, he
 
 
 def build_parser() -> argparse.ArgumentParser:
-    parser = argparse.ArgumentParser(prog="smearglepaper", description="AI paper to Chinese article draft automation")
+    from .pack_manager import harness_version
+
+    parser = argparse.ArgumentParser(prog="openmuse", description="OpenMuse · AIGC Harness")
+    parser.add_argument("--version", action="version", version=f"OpenMuse {harness_version()}")
     sub = parser.add_subparsers(dest="command", required=False)
 
     # --- durable runtime ---
@@ -79,6 +82,15 @@ def build_parser() -> argparse.ArgumentParser:
     runs_select.add_argument("paper_id")
     runs_select.add_argument("--workspace")
     runs_select.add_argument("--json", action="store_true")
+    reconcile = runs_sub.add_parser("reconcile", help="Record a human-verified external write result; does not execute or publish")
+    reconcile.add_argument("run_id")
+    decision = reconcile.add_mutually_exclusive_group(required=True)
+    decision.add_argument("--executed", action="store_true")
+    decision.add_argument("--not-executed", action="store_true")
+    reconcile.add_argument("--external-id", default="")
+    reconcile.add_argument("--confirmed", action="store_true", required=True, help="I have checked the remote service")
+    reconcile.add_argument("--workspace")
+    reconcile.add_argument("--json", action="store_true")
 
     approve = sub.add_parser("approve", help="Resolve a durable run approval")
     approve.add_argument("run_id")
@@ -665,7 +677,7 @@ def main(argv: list[str] | None = None) -> int:
         elif command == "skill":
             from .skill_registry import SkillRegistry
 
-            registry = SkillRegistry(PROJECT_ROOT / "skills")
+            registry = SkillRegistry(RESOURCE_ROOT / "skills")
             if args.skill_command == "list":
                 _print([package.manifest.to_dict() | {"path": str(package.path)} for package in registry.list()])
             elif args.skill_command == "show":
@@ -694,7 +706,7 @@ def main(argv: list[str] | None = None) -> int:
             )
             from .skill_registry import PackManifest, SkillRegistry, canonical_pack_id, discover_packs, export_pack
 
-            packs = discover_packs(PROJECT_ROOT / "packs")
+            packs = discover_packs(RESOURCE_ROOT / "packs")
             if args.pack_command == "list":
                 _print([manifest.to_dict() | {"path": str(path)} for manifest, path in packs])
             elif args.pack_command == "show":
@@ -704,7 +716,7 @@ def main(argv: list[str] | None = None) -> int:
                     raise SystemExit(f"Pack not found: {args.pack_id}")
                 _print(match.to_dict())
             elif args.pack_command == "export":
-                exported = export_pack(PROJECT_ROOT / "packs", args.pack_id, SkillRegistry(PROJECT_ROOT / "skills"), Path(args.destination))
+                exported = export_pack(RESOURCE_ROOT / "packs", args.pack_id, SkillRegistry(RESOURCE_ROOT / "skills"), Path(args.destination))
                 _print({"ok": True, "pack": args.pack_id, "skills": [str(path) for path in exported]})
             elif args.pack_command == "resolve":
                 if args.registry:
@@ -725,7 +737,7 @@ def main(argv: list[str] | None = None) -> int:
                         }
                     )
                 else:
-                    roots = (PROJECT_ROOT / "packs", *(Path(item) for item in args.source))
+                    roots = (RESOURCE_ROOT / "packs", *(Path(item) for item in args.source))
                     resolution = PackResolver(PackCatalog.from_roots(roots)).resolve(args.pack_id, args.version)
                     _print(resolution.to_dict())
             elif args.pack_command == "install":
@@ -734,9 +746,9 @@ def main(argv: list[str] | None = None) -> int:
                 store = InstalledPackStore(Path(args.root))
                 if manifest_path.is_file():
                     package = PackPackage(PackManifest.from_file(manifest_path), source)
-                    catalog = PackCatalog.from_roots((PROJECT_ROOT / "packs", source.parent, source, store.packs_dir))
+                    catalog = PackCatalog.from_roots((RESOURCE_ROOT / "packs", source.parent, source, store.packs_dir))
                     catalog.add(package)
-                    resolution = store.install(package, PackResolver(catalog), SkillRegistry(PROJECT_ROOT / "skills"))
+                    resolution = store.install(package, PackResolver(catalog), SkillRegistry(RESOURCE_ROOT / "skills"))
                 else:
                     config_store = RegistryConfigStore(store.root / "registries.json")
                     config = config_store.get(args.registry)
@@ -747,7 +759,7 @@ def main(argv: list[str] | None = None) -> int:
                     resolution = store.install(
                         package,
                         PackResolver(catalog),
-                        SkillRegistry(PROJECT_ROOT / "skills"),
+                        SkillRegistry(RESOURCE_ROOT / "skills"),
                         remote.provenance(config),
                     )
                 _print({"ok": True, "installed": resolution.to_dict(), "root": str(store.root)})
@@ -772,7 +784,7 @@ def main(argv: list[str] | None = None) -> int:
                     if match is None:
                         raise SystemExit(f"Pack not found: {args.source}")
                     package = PackPackage(*match)
-                build = build_pack_archive(package, SkillRegistry(PROJECT_ROOT / "skills"), Path(args.destination))
+                build = build_pack_archive(package, SkillRegistry(RESOURCE_ROOT / "skills"), Path(args.destination))
                 _print({"ok": True, "build": build.to_dict()})
             elif args.pack_command == "keygen":
                 _print({"ok": True, "signing_key": generate_signing_key(Path(args.private_key), args.key_id)})
@@ -849,6 +861,8 @@ def _runtime_exit(status: str, manifest: dict[str, object] | None = None) -> int
         return 7
     if status == "waiting_input":
         return 8
+    if status == "recovery_required":
+        return 9
     if status == "cancelled":
         return 130
     if manifest and manifest.get("failure_code") in {3, 4, 5, 6}:
@@ -966,6 +980,10 @@ def _run_runtime_control(args: argparse.Namespace) -> int:
     elif args.runs_command == "select":
         runtime.resolve_interaction(args.run_id, args.paper_id)
         result = runtime.resume(args.run_id)
+    elif args.runs_command == "reconcile":
+        result = runtime.reconcile_external(args.run_id, executed=args.executed, external_id=args.external_id)
+        _print(result.to_dict())
+        return 0
     else:
         raise SystemExit(f"Unknown runs command: {args.runs_command}")
     manifest = runtime.get_run(result.run_id)

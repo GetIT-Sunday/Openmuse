@@ -339,6 +339,7 @@ class SmearglePaperWorkflow:
         paper_title: str | None = None,
         notes_path: Path | None = None,
         article_path: Path | None = None,
+        writing_brief: str = "",
         revision_instruction: str = "",
         target_audience: str = "AI方向研究生和算法岗候选人",
         style_mode: str = "balanced",
@@ -371,6 +372,8 @@ class SmearglePaperWorkflow:
         if paper_title:
             paper.title = paper_title
         notes = notes_path.read_text(encoding="utf-8") if notes_path else ""
+        if writing_brief:
+            notes += "\n\n## 用户写作要求\n" + writing_brief
         original_article = article_path.read_text(encoding="utf-8") if article_path else ""
         return PaperWritingAgent(
             writer=self.writer,

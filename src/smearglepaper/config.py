@@ -5,7 +5,14 @@ import tempfile
 from pathlib import Path
 from urllib.parse import urlparse
 
-ROOT_DIR = Path(__file__).resolve().parents[2]
+SOURCE_ROOT = Path(__file__).resolve().parents[2]
+IS_SOURCE_CHECKOUT = (SOURCE_ROOT / "pyproject.toml").is_file() and (SOURCE_ROOT / "src" / "smearglepaper").is_dir()
+# Mutable state must never live inside site-packages. Keep source-checkout paths
+# compatible; installed applications use an explicit home or ~/.openmuse.
+ROOT_DIR = Path(os.environ["OPENMUSE_HOME"]).expanduser().resolve() if os.environ.get("OPENMUSE_HOME") else (
+    SOURCE_ROOT if IS_SOURCE_CHECKOUT else Path.home() / ".openmuse"
+)
+RESOURCE_ROOT = SOURCE_ROOT if IS_SOURCE_CHECKOUT else Path(__file__).resolve().parent / "_bundled"
 DATA_DIR = ROOT_DIR / "data"
 
 
@@ -49,7 +56,7 @@ def save_openai_connection(
     user_agent: str | None = None,
     clear_api_key: bool = False,
 ) -> None:
-    """Persist OpenAI-compatible settings to the project .env and update this process."""
+    """Persist settings to the mutable state root's .env and update this process."""
     base_url = base_url.strip().rstrip("/")
     model = model.strip()
     if not base_url:

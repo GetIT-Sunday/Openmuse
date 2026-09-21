@@ -1,0 +1,108 @@
+{
+  "module": "readme-magic",
+  "version": "2.1.0",
+  "stage": "review",
+  "status": "awaiting_user_review",
+  "target": "GetIT-Sunday/Openmuse@main",
+  "execution_mode": "hybrid",
+  "scores": {
+    "overall": 69,
+    "content_evidence": 69,
+    "core_documentation": 63,
+    "showcase_enhancement": 6,
+    "reading_experience": 100
+  },
+  "workflow_kind": "optimize",
+  "baseline_available": true,
+  "message": "README.md found; candidate optimization is ready for review.",
+  "findings": {
+    "safe_fix": 0,
+    "suggested_fix": 5,
+    "needs_input": 0
+  },
+  "quality_tier": "usable",
+  "strict_evidence_gate": false,
+  "candidate": "/Users/wengchuangchuang/Documents/Smearglepaper/README.optimized.md",
+  "preview": "/Users/wengchuangchuang/Documents/Smearglepaper/README.preview.html",
+  "next_actions": [
+    "apply",
+    "revise",
+    "keep_original"
+  ],
+  "visual_actions": [
+    {
+      "type": "generate_image",
+      "tool": "image_generation",
+      "asset": "introduction",
+      "prompt": "Create a GitHub README visual for the project 'smearglepaper'.\nProject type: cli.\nProject description: Turn AI papers into structured Chinese article drafts with PDF parsing, figure extraction, WeChat draft support, and MCP tools.\nVisual purpose: Communicate the project's identity, audience, and concrete value at a glance.\nRepository evidence to reflect faithfully: pyproject.toml; Turn AI papers into structured Chinese article drafts with PDF parsing, figure extraction, WeChat draft support, and MCP tools.; pip install -e .; smearglepaper --help\nPaper sources (use only as factual context): https://arxiv.org/abs/1706.03762\nPaper context: No local LaTeX context extracted\nStyle: clear technical editorial illustration, high contrast, generous whitespace, GitHub-friendly, no stock-photo look, no fake UI, no unsupported metrics.\nDo not invent features, numbers, logos, people, or product screens.\nUse only a short project title as visible text; avoid paragraphs and tiny labels.",
+      "save_to": "/Users/wengchuangchuang/Documents/Smearglepaper/assets/generated/introduction.png"
+    },
+    {
+      "type": "generate_image",
+      "tool": "image_generation",
+      "asset": "architecture",
+      "prompt": "Create a GitHub README visual for the project 'smearglepaper'.\nProject type: cli.\nProject description: Turn AI papers into structured Chinese article drafts with PDF parsing, figure extraction, WeChat draft support, and MCP tools.\nVisual purpose: Explain the major modules and data flow as a repository-grounded architecture diagram.\nRepository evidence to reflect faithfully: pyproject.toml; Turn AI papers into structured Chinese article drafts with PDF parsing, figure extraction, WeChat draft support, and MCP tools.; pip install -e .; smearglepaper --help\nPaper sources (use only as factual context): https://arxiv.org/abs/1706.03762\nPaper context: No local LaTeX context extracted\nStyle: clear technical editorial illustration, high contrast, generous whitespace, GitHub-friendly, no stock-photo look, no fake UI, no unsupported metrics.\nDo not invent features, numbers, logos, people, or product screens.\nUse only a short project title as visible text; avoid paragraphs and tiny labels.",
+      "save_to": "/Users/wengchuangchuang/Documents/Smearglepaper/assets/generated/architecture.png"
+    },
+    {
+      "type": "generate_image",
+      "tool": "image_generation",
+      "asset": "workflow",
+      "prompt": "Create a GitHub README visual for the project 'smearglepaper'.\nProject type: cli.\nProject description: Turn AI papers into structured Chinese article drafts with PDF parsing, figure extraction, WeChat draft support, and MCP tools.\nVisual purpose: Show the shortest user journey from input or setup to a useful result.\nRepository evidence to reflect faithfully: pyproject.toml; Turn AI papers into structured Chinese article drafts with PDF parsing, figure extraction, WeChat draft support, and MCP tools.; pip install -e .; smearglepaper --help\nPaper sources (use only as factual context): https://arxiv.org/abs/1706.03762\nPaper context: No local LaTeX context extracted\nStyle: clear technical editorial illustration, high contrast, generous whitespace, GitHub-friendly, no stock-photo look, no fake UI, no unsupported metrics.\nDo not invent features, numbers, logos, people, or product screens.\nUse only a short project title as visible text; avoid paragraphs and tiny labels.",
+      "save_to": "/Users/wengchuangchuang/Documents/Smearglepaper/assets/generated/workflow.png"
+    }
+  ],
+  "preview_status": "opened",
+  "host_action": {
+    "type": "open_file",
+    "tool": "mcp__codex_app__open_in_codex",
+    "path": "/Users/wengchuangchuang/Documents/Smearglepaper/README.preview.html",
+    "then": "readme-magic preview --project-path <project> --input README.md --compare README.optimized.md --output README.preview.html --opened"
+  },
+  "events": [
+    {
+      "stage": "discover",
+      "status": "completed",
+      "label": "Resolved target repository"
+    },
+    {
+      "stage": "inspect",
+      "status": "completed",
+      "label": "Collected repository evidence"
+    },
+    {
+      "stage": "score",
+      "status": "completed",
+      "label": "Scored content and reading experience"
+    },
+    {
+      "stage": "plan",
+      "status": "completed",
+      "label": "Classified safe fixes and review items"
+    },
+    {
+      "stage": "optimize",
+      "status": "completed",
+      "label": "Wrote candidate README",
+      "artifact": "/Users/wengchuangchuang/Documents/Smearglepaper/README.optimized.md"
+    },
+    {
+      "stage": "preview",
+      "status": "completed",
+      "label": "Rendered before/after preview",
+      "artifact": "/Users/wengchuangchuang/Documents/Smearglepaper/README.preview.html"
+    },
+    {
+      "stage": "review",
+      "status": "awaiting_user_review",
+      "label": "Waiting for user review",
+      "target": "GetIT-Sunday/Openmuse@main",
+      "execution_mode": "hybrid",
+      "actions": [
+        "apply",
+        "revise",
+        "keep_original"
+      ]
+    }
+  ]
+}

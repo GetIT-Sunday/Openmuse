@@ -1,5 +1,6 @@
 """Durable runtime shared by the CLI, TUI, and MCP server."""
 
+from ..harness_events import HarnessEvent
 from .engine import AgentRuntime, RuntimeErrorCode
 from .models import (
     ArtifactRecord,
@@ -17,6 +18,7 @@ from .providers import LLMProvider, Notifier, Publisher, SourceProvider
 
 __all__ = [
     "AgentRuntime",
+    "HarnessEvent",
     "ArtifactRecord",
     "RunEvent",
     "RunRequest",

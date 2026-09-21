@@ -35,4 +35,7 @@ def resolve_workspace(explicit: Path | str | None = None, config: dict[str, Any]
     configured = settings.get("workspace")
     if isinstance(configured, str) and configured.strip():
         return Path(configured).expanduser().resolve()
+    home = os.getenv("OPENMUSE_HOME", "").strip()
+    if home:
+        return Path(home).expanduser().resolve() / "runtime"
     return DEFAULT_WORKSPACE

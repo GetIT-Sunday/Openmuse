@@ -1,0 +1,57 @@
+{
+  "project": "smearglepaper",
+  "mode": "native",
+  "provider": "openai",
+  "model": "gpt-image-1",
+  "assets": [
+    {
+      "key": "introduction",
+      "kind": "illustration",
+      "purpose": "Communicate the project's identity, audience, and concrete value at a glance.",
+      "section": "Overview",
+      "filename": "assets/generated/introduction.png",
+      "prompt": "Create a GitHub README visual for the project 'smearglepaper'.\nProject type: cli.\nProject description: Turn AI papers into structured Chinese article drafts with PDF parsing, figure extraction, WeChat draft support, and MCP tools.\nVisual purpose: Communicate the project's identity, audience, and concrete value at a glance.\nRepository evidence to reflect faithfully: pyproject.toml; Turn AI papers into structured Chinese article drafts with PDF parsing, figure extraction, WeChat draft support, and MCP tools.; pip install -e .; smearglepaper --help\nPaper sources (use only as factual context): https://arxiv.org/abs/1706.03762\nPaper context: No local LaTeX context extracted\nStyle: clear technical editorial illustration, high contrast, generous whitespace, GitHub-friendly, no stock-photo look, no fake UI, no unsupported metrics.\nDo not invent features, numbers, logos, people, or product screens.\nUse only a short project title as visible text; avoid paragraphs and tiny labels.",
+      "required": true,
+      "source": "paper",
+      "status": "native_required",
+      "path": "assets/generated/introduction.png",
+      "error": ""
+    },
+    {
+      "key": "architecture",
+      "kind": "diagram",
+      "purpose": "Explain the major modules and data flow as a repository-grounded architecture diagram.",
+      "section": "Architecture / How It Works",
+      "filename": "assets/generated/architecture.png",
+      "prompt": "Create a GitHub README visual for the project 'smearglepaper'.\nProject type: cli.\nProject description: Turn AI papers into structured Chinese article drafts with PDF parsing, figure extraction, WeChat draft support, and MCP tools.\nVisual purpose: Explain the major modules and data flow as a repository-grounded architecture diagram.\nRepository evidence to reflect faithfully: pyproject.toml; Turn AI papers into structured Chinese article drafts with PDF parsing, figure extraction, WeChat draft support, and MCP tools.; pip install -e .; smearglepaper --help\nPaper sources (use only as factual context): https://arxiv.org/abs/1706.03762\nPaper context: No local LaTeX context extracted\nStyle: clear technical editorial illustration, high contrast, generous whitespace, GitHub-friendly, no stock-photo look, no fake UI, no unsupported metrics.\nDo not invent features, numbers, logos, people, or product screens.\nUse only a short project title as visible text; avoid paragraphs and tiny labels.",
+      "required": true,
+      "source": "paper",
+      "status": "native_required",
+      "path": "assets/generated/architecture.png",
+      "error": ""
+    },
+    {
+      "key": "workflow",
+      "kind": "diagram",
+      "purpose": "Show the shortest user journey from input or setup to a useful result.",
+      "section": "Workflow / Quick Start",
+      "filename": "assets/generated/workflow.png",
+      "prompt": "Create a GitHub README visual for the project 'smearglepaper'.\nProject type: cli.\nProject description: Turn AI papers into structured Chinese article drafts with PDF parsing, figure extraction, WeChat draft support, and MCP tools.\nVisual purpose: Show the shortest user journey from input or setup to a useful result.\nRepository evidence to reflect faithfully: pyproject.toml; Turn AI papers into structured Chinese article drafts with PDF parsing, figure extraction, WeChat draft support, and MCP tools.; pip install -e .; smearglepaper --help\nPaper sources (use only as factual context): https://arxiv.org/abs/1706.03762\nPaper context: No local LaTeX context extracted\nStyle: clear technical editorial illustration, high contrast, generous whitespace, GitHub-friendly, no stock-photo look, no fake UI, no unsupported metrics.\nDo not invent features, numbers, logos, people, or product screens.\nUse only a short project title as visible text; avoid paragraphs and tiny labels.",
+      "required": true,
+      "source": "paper",
+      "status": "native_required",
+      "path": "assets/generated/workflow.png",
+      "error": ""
+    }
+  ],
+  "paper_sources": [
+    "https://arxiv.org/abs/1706.03762"
+  ],
+  "paper_context": {},
+  "optional_skills": {
+    "cli-demo": true,
+    "screenshot": true,
+    "paper-extractor": true,
+    "benchmark-visualizer": false
+  }
+}

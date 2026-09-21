@@ -28,7 +28,12 @@ from textual.widgets import (
 )
 
 from .config import DATA_DIR, runtime_settings
+from .conversation import ConversationController, offline_request
 from .harness import ConversationHarness, ConversationMemory, TurnEvent
+from .harness_events import EventJournal, HarnessEvent, normalize_event
+from .harness_projection import HarnessProjection
+from .preference_memory import PreferenceMemory
+from .preference_ui import PreferenceMemoryModal
 from .preview_window import launch_mobile_preview_target, select_preview_html
 from .run_state import (
     ArtifactInfo,
@@ -42,7 +47,7 @@ from .run_state import (
 from .runtime import AgentRuntime, RunEvent, RunRequest
 from .runtime_preview import RuntimePreviewServer
 from .session import Session, auto_title, delete_session, list_sessions, load_session, save_session
-from .tools import SYSTEM_PROMPT, execute_tool, installed_capabilities
+from .tools import execute_tool
 from .trace_message import TraceMessage
 from .tui_components import (
     OPENMUSE_LOGO,
@@ -69,30 +74,6 @@ def copy_to_clipboard(text: str) -> bool:
         return False
 
 
-def _select_article_markdown(artifacts: object) -> Path | None:
-    if not isinstance(artifacts, list):
-        return None
-    candidates: list[Path] = []
-    for item in artifacts:
-        if not isinstance(item, dict) or item.get("status") == "stale" or item.get("producer") != "write":
-            continue
-        path = Path(str(item.get("path", "")))
-        if path.suffix.lower() == ".md" and path.is_file() and "publish_package" not in path.name:
-            candidates.append(path)
-    return min(candidates, key=lambda path: (0 if "article" in path.name.lower() else 1, path.name)) if candidates else None
-
-
-def _select_article_json(artifacts: object) -> Path | None:
-    if not isinstance(artifacts, list):
-        return None
-    candidates: list[Path] = []
-    for item in artifacts:
-        if not isinstance(item, dict) or item.get("status") == "stale" or item.get("producer") != "write":
-            continue
-        path = Path(str(item.get("path", "")))
-        if path.suffix.lower() == ".json" and path.is_file() and "review" not in path.name:
-            candidates.append(path)
-    return min(candidates, key=lambda path: (0 if "article" in path.name.lower() else 1, path.name)) if candidates else None
 
 
 class ApprovalModal(ModalScreen[bool]):
@@ -546,11 +527,14 @@ class AgentConsole(Screen):
         self.session = Session.create()
         self.run_state = RunState(model=load_model_info())
         self._busy = False
+        self._controller_running = False
+        self._recovery_notice = ""
         self._last_agent_reply = ""
         self._context_visible = True
         self._welcome_visible = True
         self._trace_messages: list[TraceMessage] = []
         self.runtime = AgentRuntime()
+        self._preference_memory = PreferenceMemory(DATA_DIR / "preferences.sqlite3")
         self._active_run_id = ""
         self._active_agent = "main"
         self._agents = ["main", "scout", "reader", "writer", "technical-reviewer", "wechat-editor", "publisher"]
@@ -569,10 +553,14 @@ class AgentConsole(Screen):
         self._streaming_message: TraceMessage | None = None
         self._activity_message: TraceMessage | None = None
         self._stream_render_pending = False
+        self._event_journal = EventJournal(DATA_DIR / "sessions" / f"{self.session.id}.events.jsonl")
         self._conversation_harness = ConversationHarness(
             self.session.id,
             ConversationMemory(DATA_DIR / "sessions" / f"{self.session.id}.memory.json"),
+            event_journal=self._event_journal,
         )
+        self._harness_projection = HarnessProjection()
+        self.runtime.attach_event_journal(self.session.id, self._event_journal)
 
     def compose(self) -> ComposeResult:
         yield Static("", id="session-bar")
@@ -590,6 +578,8 @@ class AgentConsole(Screen):
                     id="conversation-empty",
                 )
                 yield RichLog(id="trace-area", markup=True, highlight=True, wrap=True)
+                yield Button("继续未完成的对话", id="resume-turn", variant="primary")
+                yield Button("有待确认的偏好 · 查看", id="memory-review")
                 yield InputBar(id="input-bar")
 
         yield Static(self._footer_text(), id="footer-bar")
@@ -615,7 +605,9 @@ class AgentConsole(Screen):
         if dict(runtime_settings().get("llm", {})).get("provider") == "none":
             stage.query_one("#stage-current", Static).update("尚未配置模型。请先设置 API Key 和模型地址，再开始生成文章。")
             stage.set_setup_required(True)
-        self.query_one("#quick-continue", Button).disabled = not any(session.run_ids for session in list_sessions())
+        self.query_one("#quick-continue", Button).disabled = not any(session.messages or session.run_ids for session in list_sessions())
+        self.query_one("#resume-turn", Button).display = False
+        self._refresh_memory_review()
         self.query_one("#trace-area", RichLog).display = False
         self.query_one("#conversation-empty", Static).display = True
         self.query_one("#chat-input", Input).focus()
@@ -623,13 +615,14 @@ class AgentConsole(Screen):
         self._update_session_bar()
         self._update_input_placeholder()
         self.set_interval(1.0, self._refresh_liveness)
+        self.set_interval(0.05, self._flush_stream_render)
 
     def _refresh_liveness(self) -> None:
         """Keep the composer honest during long network/model operations."""
         if not self._busy or not self._run_started_monotonic:
             return
         elapsed = int(time.monotonic() - self._run_started_monotonic)
-        current = self._presentation.phase if self._presentation else "准备工作"
+        current = self._harness_projection.state.activity or "准备工作"
         self.query_one("#input-bar", InputBar).set_meta(
             self._selected_model or (self.run_state.model.name if self.run_state.model else "local"),
             "real" if self._real_mode else "dry-run",
@@ -711,15 +704,14 @@ class AgentConsole(Screen):
 
     def _schedule_trace_render(self) -> None:
         """Batch token updates so long streamed replies do not redraw per token."""
-        if self._stream_render_pending:
-            return
         self._stream_render_pending = True
 
-        def flush() -> None:
+    def _flush_stream_render(self) -> None:
+        # A repeating tick recovers after a busy frame; a skipped one-shot
+        # timer could leave _stream_render_pending permanently set.
+        if self._stream_render_pending:
             self._stream_render_pending = False
             self._render_trace()
-
-        self.set_timer(0.05, flush)
 
     def _record_trace(self, message: TraceMessage) -> None:
         if not message.detail_only:
@@ -816,14 +808,17 @@ class AgentConsole(Screen):
         model = self._selected_model or (self.run_state.model.name if self.run_state.model else "未配置模型")
         if len(model) > 24:
             model = model[:21] + "..."
-        if self._busy:
-            status, color = "处理中", "#2997ff"
-        elif self._presentation and self._presentation.status == "completed":
-            status, color = "已完成", "#30d158"
-        elif self._presentation and self._presentation.status == "failed":
-            status, color = "需要处理", "#ff453a"
-        else:
-            status, color = "就绪", "#98989f"
+        status, color = {
+            "running": ("处理中", "#2997ff"),
+            "completed": ("已完成", "#30d158"),
+            "failed": ("需要处理", "#ff453a"),
+            "interrupted": ("可以恢复", "#eab308"),
+            "recovery_required": ("需要核对", "#eab308"),
+            "waiting_input": ("等待选择", "#ff9f0a"),
+            "waiting_approval": ("等待确认", "#ff9f0a"),
+            "cancelling": ("正在取消", "#ff9f0a"),
+            "cancelled": ("已取消", "#98989f"),
+        }.get(self._harness_projection.state.status, ("就绪", "#98989f"))
         text = Text("OpenMuse  ·  ", style="bold #f5f5f7", no_wrap=True, overflow="ellipsis")
         text.append(title, style="#d1d1d6")
         if self.size.width >= 100:
@@ -840,7 +835,6 @@ class AgentConsole(Screen):
     def on_input_submitted(self, event: Input.Submitted) -> None:
         text = event.value.strip()
         # Filter out terminal escape sequences (Kitty keyboard protocol etc.)
-        import re
         text = re.sub(r'\[[\d;]*[A-Za-z]', '', text)
         text = re.sub(r'\[[\d;]*:\d+u', '', text)
         text = text.strip()
@@ -903,6 +897,13 @@ class AgentConsole(Screen):
         if button_id == "composer-stop":
             self.action_cancel_run()
             return
+        if button_id == "resume-turn":
+            self.action_resume_turn()
+            return
+        if button_id == "memory-review":
+            if not self._busy:
+                self._show_memory()
+            return
         input_widget = self.query_one("#chat-input", Input)
         if button_id == "quick-paper":
             input_widget.placeholder = "粘贴 arXiv 论文链接或输入论文 ID…"
@@ -911,7 +912,7 @@ class AgentConsole(Screen):
             input_widget.placeholder = "输入研究主题，例如：多智能体协作…"
             input_widget.focus()
         elif button_id == "quick-continue":
-            previous = next((session for session in list_sessions() if session.run_ids), None)
+            previous = next((session for session in list_sessions() if session.messages or session.run_ids), None)
             if previous:
                 self._reload_session(previous)
             else:
@@ -943,130 +944,53 @@ class AgentConsole(Screen):
         )
         self._choose_candidate(paper_id, str(selected.get("title", "")))
 
+
     def _handle_user_input(self, text: str) -> None:
         if self._busy:
-            self._apply_followup(text)
+            if text.strip() == "/cancel":
+                self.action_cancel_run()
+            else:
+                self.query_one("#chat-input", Input).value = text
+                self._append_system("当前任务仍在进行，已保留你的输入。可以等待完成，或先按 Esc 取消。")
             return
-
         if text.startswith("/"):
             self._handle_slash_command(text)
             return
-
-        if self._presentation and self._presentation.status == "waiting_input":
-            self._handle_candidate_input(text)
+        store = self._conversation_harness.turn_store
+        try:
+            pending = store.pending() if store else False
+        except RuntimeError as exc:
+            self.query_one("#chat-input", Input).value = text
+            self._append_error(str(exc))
+            self._refresh_recovery()
             return
-
-        if self._is_revision_context(text):
-            self._revise_current_article(text)
+        if pending:
+            self.query_one("#chat-input", Input).value = text
+            self._append_system("上次对话尚未完成，请先点击继续或输入 /resume；也可以新建会话。")
+            self._refresh_recovery()
             return
-
+        if dict(runtime_settings().get("llm", {})).get("provider") == "none":
+            self.query_one("#chat-input", Input).value = text
+            self._append_system("请先用 /connect 配置模型；也可以用 /offline 查看明确标注的离线示例。")
+            return
         self._hide_welcome()
         self._append_user(text)
         self.session.messages.append({"role": "user", "content": text})
-        if self._is_conversation_turn(text):
-            self._run_chat_turn(text)
-        else:
-            self._run_agent(text)
+        save_session(self.session)
+        # Claim the slot before scheduling: rapid input must not replace a turn.
+        self._busy = True
+        self._run_chat_turn(text)
 
-    def _is_conversation_turn(self, text: str) -> bool:
-        lower = text.lower()
-        if re.search(r"https?://|(?<!\d)\d{4}\.\d{4,5}(?:v\d+)?(?!\d)", text):
-            return False
-        workflow_words = (
-            "论文", "选题", "文章", "解读", "日报", "周报", "公众号", "微信", "草稿",
-            "收集", "搜索", "解析", "预览", "发布", "写一篇", "改写", "重新选题",
-        )
-        return not any(word in lower for word in workflow_words)
-
-    def _is_revision_context(self, text: str) -> bool:
-        if not self._presentation or self._presentation.status != "completed":
-            return False
-        if self._presentation.workflow not in {"paper-to-article", "paper-to-wechat"}:
-            return False
-        lower = text.lower()
-        if re.search(r"https?://", text) or re.search(r"(?<!\d)\d{4}\.\d{4,5}(?:v\d+)?(?!\d)", text):
-            return False
-        return not any(word in lower for word in ("新任务", "重新选题", "换一篇论文", "日报", "周报"))
-
-    def _revise_current_article(self, instruction: str) -> None:
-        if not self._active_run_id:
-            return
-        manifest = self.runtime.get_run(self._active_run_id)
-        markdown = _select_article_markdown(manifest.get("artifacts", []))
-        if markdown is None:
-            self._append_system("没有找到当前文章正文，无法开始修订。")
-            return
-        request = dict(manifest.get("request", {}))
-        inputs = dict(request.get("inputs", {}))
-        revision_number = int(inputs.get("revision_number", 1)) + 1
-        self._hide_welcome()
-        self._append_user(instruction)
-        self.session.messages.append({"role": "user", "content": instruction})
-        self._summary_run_id = ""
-        self.runtime.update_inputs(
-            self._active_run_id,
-            {
-                "input_article": str(markdown),
-                "revision_instruction": instruction,
-                "revision_number": revision_number,
-            },
-            restart_step="write",
-        )
-        self._run_revision(revision_number, instruction)
-
-    def _handle_candidate_input(self, text: str) -> None:
-        interaction = self._presentation.interaction if self._presentation else None
-        options = list(interaction.get("options", [])) if interaction else []
-        normalized = text.strip().lower()
-        if not options or "扩大" in text or "修改主题" in text or "更换主题" in text:
-            self._restart_discovery(text)
-            return
-        number_words = {"一": 1, "二": 2, "三": 3}
-        match = re.search(r"(?:第|选|选择)?\s*([123一二三])", normalized)
-        token = match.group(1) if match else ""
-        index = int(token) if token.isdigit() else number_words.get(token, 0)
-        selected: dict[str, object] | None = None
-        if 1 <= index <= len(options) and isinstance(options[index - 1], dict):
-            selected = options[index - 1]
-        if selected is None:
-            selected = next(
-                (
-                    option
-                    for option in options
-                    if isinstance(option, dict)
-                    and (normalized == str(option.get("paper_id", "")).lower() or normalized in str(option.get("title", "")).lower())
-                ),
-                None,
-            )
-        if selected is None:
-            self._append_system("请选择候选列表中的第 1、2 或 3 篇论文。")
-            return
-        self._choose_candidate(str(selected.get("paper_id", "")), str(selected.get("title", "")))
 
     def _choose_candidate(self, paper_id: str, title: str) -> None:
-        if not self._active_run_id or not paper_id:
+        if self._busy or not self._active_run_id or not paper_id:
             return
         self._hide_welcome()
         self._append_user(f"选择：{title or paper_id}")
         self.session.messages.append({"role": "user", "content": f"选择：{title or paper_id}"})
         self._resume_candidate(paper_id)
 
-    def _restart_discovery(self, text: str) -> None:
-        if not self._active_run_id:
-            return
-        updates: dict[str, object]
-        if "扩大" in text or "90" in text:
-            updates = {"days": 90}
-            message = "已将搜索范围扩大到 90 天。"
-        else:
-            topic = re.sub(r"^(修改|更换)?(?:研究)?主题[：:]?", "", text).strip() or text.strip()
-            updates = {"query": topic, "request": topic}
-            message = f"正在按新主题重新寻找：{topic}"
-        self._hide_welcome()
-        self._append_user(text)
-        self.session.messages.append({"role": "user", "content": text})
-        self.runtime.update_inputs(self._active_run_id, updates, restart_step="collect")
-        self._rerun_discovery(message)
+
 
     def _open_current_article(self) -> None:
         if not self._active_run_id:
@@ -1079,41 +1003,15 @@ class AgentConsole(Screen):
         if not webbrowser.open(source.as_uri(), new=1):
             self._append_error("系统浏览器无法打开文章。")
 
-    def _create_current_draft(self) -> None:
-        if not self._active_run_id or not self._presentation:
-            return
-        manifest = self.runtime.get_run(self._active_run_id)
-        article_json = _select_article_json(manifest.get("artifacts", []))
-        if article_json is None:
-            self._append_system("没有找到已审阅文章，无法创建草稿。")
-            return
-        if not self._presentation.quality.get("publish_ready"):
-            self._append_system("文章尚未通过发布质量检查，请先根据建议继续修改。")
-            return
-        self._start_draft_creation(str(article_json), dict(self._presentation.quality))
 
-    def _apply_followup(self, text: str) -> None:
-        if not self._active_run_id:
-            self._append_system("No active run is available for this update.")
+    def _create_current_draft(self) -> None:
+        if self._busy:
+            self._append_system("请等待当前任务完成后再创建草稿。")
             return
-        updates: dict[str, object] = {}
-        if any(word in text for word in ("严谨", "学术")):
-            updates["style_mode"] = "rigorous"
-        elif any(word in text for word in ("通俗", "大众")):
-            updates["style_mode"] = "popular"
-        elif "面试" in text:
-            updates["style_mode"] = "interview"
-        audience = re.search(r"面向(.+?)(?:的|读者|来写|$)", text)
-        if audience:
-            updates["target_audience"] = audience.group(1).strip()
-        score = re.search(r"(?:评分|分数|门槛).*?(\d{2,3})", text)
-        if score:
-            updates["target_score"] = int(score.group(1))
-        if not updates:
-            self._append_system("The run is active. Use Esc to cancel, or specify a new audience, style, or quality score.")
-            return
-        self.runtime.update_inputs(self._active_run_id, updates, restart_step="write")
-        self._append_system(f"Updated downstream writing inputs: {json.dumps(updates, ensure_ascii=False)}")
+        self._append_user("请求创建微信草稿")
+        self.session.messages.append({"role": "user", "content": "请求创建微信草稿"})
+        self._busy = True
+        self._run_controller_action("request_draft", {}, "请求创建微信草稿")
 
     def _handle_slash_command(self, text: str) -> None:
         parts = text.split(maxsplit=1)
@@ -1131,17 +1029,43 @@ class AgentConsole(Screen):
             self.action_new_session()
         elif cmd == "/demo-run":
             self.action_demo_run()
+        elif cmd == "/offline":
+            self._busy = True
+            self._run_offline_example(parts[1] if len(parts) > 1 else "离线示例")
         elif cmd == "/cancel":
             self.action_cancel_run()
+        elif cmd == "/resume":
+            self.action_resume_turn()
         elif cmd == "/approve" and self._pending_approval:
             self._resolve_approval(self._pending_approval, True)
         elif cmd == "/details":
             self.action_toggle_details()
         elif cmd == "/memory":
-            self._show_memory()
+            argument = parts[1].strip().lower() if len(parts) > 1 else ""
+            if argument in {"on", "off"}:
+                try:
+                    enabled = argument == "on"
+                    self._preference_memory.set_enabled(enabled)
+                    self._record_memory_action("memory.settings_changed", {"enabled": enabled})
+                    self._append_system("已启用偏好记忆。" if enabled else "已暂停偏好记忆：不会检索或由模型新增提议；已有偏好保留，可在 /memory 中删除。")
+                except (ValueError, OSError) as exc:
+                    self._append_error(str(exc))
+            else:
+                self._show_memory()
         elif cmd == "/forget":
-            self._conversation_harness.memory.clear()
-            self._append_system("已清空对话记忆。当前文章、运行记录和已保存产物不会受影响。")
+            try:
+                if len(parts) > 1:
+                    identifier = parts[1].strip()
+                    self._preference_memory.forget(identifier)
+                    self._record_memory_action("memory.forgotten", {"id": identifier})
+                    self._append_system("已忘记这条偏好，之后不再从偏好库读取。聊天记录和文章仍保留。")
+                elif self._conversation_harness.turn_store and self._conversation_harness.turn_store.pending():
+                    self._append_system("当前有待恢复的对话。请先完成恢复或新建会话，避免旧快照重新带回已清空的上下文。")
+                else:
+                    self._conversation_harness.memory.clear()
+                    self._append_system("已清空本会话上下文。长期偏好请在 /memory 中删除；聊天记录、任务和文章未删除。")
+            except (ValueError, RuntimeError, OSError) as exc:
+                self._append_error(str(exc))
         elif cmd in {"/session", "/sessions", "/seesion"}:
             argument = parts[1].strip() if len(parts) > 1 else ""
             if argument.lower() in {"new", "create"}:
@@ -1211,8 +1135,9 @@ class AgentConsole(Screen):
                 "常用操作：\n"
                 "  /preview — 打开手机预览\n"
                 "  /details — 查看完整运行详情\n"
-                "  /memory — 查看当前对话记忆\n"
-                "  /forget — 清空对话记忆（不删除文章）\n"
+                "  /memory — 确认、编辑或删除跨会话写作偏好\n"
+                "  /memory off|on — 暂停或启用偏好记忆\n"
+                "  /forget ID — 忘记一条偏好；不带 ID 清空本会话上下文\n"
                 "  /connect — 配置并验证模型连接\n"
                 "  /model — 选择本次会话模型\n"
                 "  /reasoning — 设置模型推理强度\n"
@@ -1221,6 +1146,8 @@ class AgentConsole(Screen):
                 "  /mode dry-run|real — 选择安全预览或真实草稿\n"
                 "  /status — 检查配置\n"
                 "  /diagnose — 查看脱敏连接与运行诊断\n"
+                "  /offline — 运行离线示例（不调用模型）\n"
+                "  /resume — 安全继续中断的对话或任务\n"
                 "  /help — 显示此帮助\n\n"
                 "快捷键：\n"
                 "  Ctrl+N — 新建会话\n"
@@ -1299,8 +1226,7 @@ class AgentConsole(Screen):
         memory = self._conversation_harness.memory
         if not memory.turns and not memory.summary:
             self._append_system("当前没有对话记忆。")
-            return
-        lines = [f"当前对话记忆：{len(memory.turns)} 条（最多保留 {memory.max_turns} 条）"]
+        lines = [f"当前对话记忆：{len(memory.turns)} 条（按上下文预算压缩）"]
         if memory.summary:
             lines.append(f"摘要：{memory.summary}")
         labels = {"user": "你", "assistant": OPENMUSE_LOGO, "tool": "工具"}
@@ -1311,6 +1237,31 @@ class AgentConsole(Screen):
                 content = content[:93] + "..."
             lines.append(f"{role}：{content}")
         self._append_system("\n".join(lines))
+        self.app.push_screen(PreferenceMemoryModal(self._preference_memory, self.session.id, self._record_memory_action),
+                             lambda _: self._refresh_memory_review())
+
+    def _record_memory_action(self, kind: str, metadata: dict[str, object]) -> None:
+        event = HarnessEvent.create(kind, session_id=self.session.id, turn_id="memory-management",
+                                    sequence=0, source="memory", payload=metadata)
+        try:
+            self._event_journal.append(event)
+        except (ValueError, OSError):
+            self._append_error("偏好已更新，但事件记录保存失败；请检查会话日志。")
+        self._refresh_memory_review()
+
+    def _refresh_memory_review(self) -> None:
+        button = self.query_one("#memory-review", Button)
+        try:
+            count = sum(row["status"] == "pending" and not row["expired"]
+                        for row in self._preference_memory.entries(session_id=self.session.id))
+        except (ValueError, OSError) as exc:
+            button.display = False
+            self._append_error(str(exc))
+            return
+        button.display = bool(count)
+        button.label = f"{count} 条偏好待确认 · 查看"
+        if count and self._welcome_visible:
+            self._hide_welcome()
 
     def _show_diagnostics(self) -> None:
         """Show a copyable, secret-free snapshot for self-service debugging."""
@@ -1395,6 +1346,10 @@ class AgentConsole(Screen):
             "model": "/model",
             "session": "/session",
             "preview": "/preview",
+            "offline": "/offline",
+            "resume": "/resume",
+            "memory": "/memory",
+            "forget": "/forget",
             "collect-arxiv": "收集最近 agents 方向的论文",
             "rank-papers": "收集并排序最近 agents 方向的论文",
             "ingest-paper": "解析当前选择的论文",
@@ -1423,11 +1378,26 @@ class AgentConsole(Screen):
                 self._append_error(f"会话不存在: {session_id}")
 
     def _reload_session(self, session: Session) -> None:
+        if self._busy:
+            self._append_system("请先停止当前任务，等待安全收尾后再切换会话。")
+            return
         self.session = session
+        self._event_journal = EventJournal(DATA_DIR / "sessions" / f"{session.id}.events.jsonl")
         self._conversation_harness = ConversationHarness(
             session.id,
             ConversationMemory(DATA_DIR / "sessions" / f"{session.id}.memory.json"),
+            event_journal=self._event_journal,
         )
+        self._harness_projection.reset()
+        self.runtime.attach_event_journal(session.id, self._event_journal)
+        self._recovery_notice = ""
+        journal_error = ""
+        journal_events = []
+        try:
+            journal_events = self._event_journal.events()
+            self._harness_projection.replay(journal_events)
+        except (ValueError, OSError) as exc:
+            journal_error = str(exc)
         self.run_state = RunState(model=load_model_info())
         self._last_agent_reply = ""
         self._welcome_visible = True
@@ -1442,6 +1412,8 @@ class AgentConsole(Screen):
 
         log = self.query_one("#trace-area", RichLog)
         log.clear()
+        if journal_error:
+            self._append_error("会话事件记录无法读取，已保留原文件。请检查记录或新建会话。")
 
         if session.messages:
             self._hide_welcome()
@@ -1456,8 +1428,12 @@ class AgentConsole(Screen):
         if session.run_ids:
             self._active_run_id = session.run_ids[-1]
             try:
+                if journal_events:
+                    self._harness_projection.replay(journal_events)
+                else:
+                    self._harness_projection.replay(self.runtime.events(self._active_run_id))
                 for event in self.runtime.events(self._active_run_id):
-                    self._render_replayed_event(event)
+                    self._render_replayed_event(event, apply_projection=False)
                 self._sync_runtime_state()
                 has_persisted_summary = any(
                     msg.get("role") == "assistant"
@@ -1479,15 +1455,52 @@ class AgentConsole(Screen):
         self._update_context()
         self._update_sidebar()
 
+        # A turn receipt can have committed just before the session transcript
+        # was saved. Reconcile that one answer without invoking the model again.
+        store = self._conversation_harness.turn_store
+        try:
+            saved = store.load() if store else {}
+        except RuntimeError:
+            self._refresh_recovery()
+            return
+        if saved.get("status") == "completed" and saved.get("reply") and not any(
+            m.get("turn_id") == saved.get("turn_id") for m in self.session.messages
+        ):
+            self.session.messages.append({"role": "assistant", "content": saved["reply"], "turn_id": saved["turn_id"]})
+            self._append_agent(str(saved["reply"]))
+            save_session(self.session)
+        elif saved.get("status") not in {None, "completed", "abandoned"}:
+            partial = ""
+            for event in journal_events:
+                if event.turn_id != saved.get("turn_id"):
+                    continue
+                if event.type in {"turn.started", "model.started"}:
+                    partial = ""
+                elif event.type == "model.delta":
+                    partial += str(event.payload.get("text", ""))
+            if partial:
+                self._append_agent("[上次回答未完成，以下仅为已收到的片段；继续后会重新生成]\n\n" + partial)
+        self._refresh_recovery()
+        self._refresh_memory_review()
+
     # ── Actions ──────────────────────────────────────────────────────────
 
     def action_new_session(self) -> None:
+        if self._busy:
+            self._append_system("请先停止当前任务，等待安全收尾后再创建会话。")
+            return
         self._stop_preview_server()
+        self.query_one("#resume-turn", Button).display = False
+        self._recovery_notice = ""
         self.session = Session.create()
+        self._event_journal = EventJournal(DATA_DIR / "sessions" / f"{self.session.id}.events.jsonl")
         self._conversation_harness = ConversationHarness(
             self.session.id,
             ConversationMemory(DATA_DIR / "sessions" / f"{self.session.id}.memory.json"),
+            event_journal=self._event_journal,
         )
+        self._harness_projection.reset()
+        self.runtime.attach_event_journal(self.session.id, self._event_journal)
         self.run_state = RunState(model=load_model_info())
         self._last_agent_reply = ""
         self._welcome_visible = True
@@ -1506,6 +1519,8 @@ class AgentConsole(Screen):
         self._update_header()
         self._update_context()
         self._update_sidebar()
+
+        self._refresh_memory_review()
 
     def action_save_session(self) -> None:
         if not self.session.messages:
@@ -1567,30 +1582,38 @@ class AgentConsole(Screen):
         self._render_trace()
         self._append_system("已展开运行详情" if self._details_visible else "已收起运行详情")
 
-    def action_open_preview(self) -> None:
+    def action_open_preview(self) -> bool:
         if not self._active_run_id:
             self._append_system("当前还没有可预览的文章。先生成一篇公众号文章。")
-            return
+            return False
         try:
             manifest = self.runtime.get_run(self._active_run_id)
+            if manifest.get("workflow") == "publish-existing":
+                source_run = manifest.get("request", {}).get("inputs", {}).get("source_run_id")
+                if source_run:
+                    source_manifest = self.runtime.get_run(str(source_run))
+                    if source_manifest.get("session_id") == self.session.id:
+                        manifest = source_manifest
         except FileNotFoundError:
             self._append_error("当前运行记录不存在，无法打开预览。")
-            return
+            return False
         source = select_preview_html(manifest.get("artifacts", []))
         if source is None:
             self._append_system("当前运行尚未生成文章 HTML。完成文章生成后再打开手机预览。")
-            return
+            return False
         try:
-            if self._preview_server is None or self._preview_server.run_id != self._active_run_id:
+            preview_run_id = str(manifest["run_id"])
+            if self._preview_server is None or self._preview_server.run_id != preview_run_id:
                 self._stop_preview_server()
-                self._preview_server = RuntimePreviewServer(self.runtime, self._active_run_id)
+                self._preview_server = RuntimePreviewServer(self.runtime, preview_run_id)
             url = self._preview_server.start()
             launched = launch_mobile_preview_target(url)
         except (OSError, RuntimeError) as exc:
             self._append_error(f"无法打开手机预览：{exc}")
-            return
+            return False
         mode = "独立手机窗口" if launched.mode == "app" else "默认浏览器"
         self._append_system(f"已在{mode}中打开手机预览。文章修改完成后会自动刷新。")
+        return True
 
     def _stop_preview_server(self) -> None:
         if self._preview_server is not None:
@@ -1610,7 +1633,6 @@ class AgentConsole(Screen):
         self._conversation_harness.cancel()
         if self._active_run_id:
             self.runtime.cancel(self._active_run_id)
-        self._set_activity("正在取消 · 已停止继续生成，等待当前请求收尾")
         self._append_system("已请求取消当前任务。")
 
     def action_dismiss_escape(self) -> None:
@@ -1641,9 +1663,10 @@ class AgentConsole(Screen):
         self._append_system(f"Agent view: {self._active_agent}")
         self._update_input_placeholder()
         if self._active_run_id:
+            self._harness_projection.replay(self._event_journal.events())
             for event in self.runtime.events(self._active_run_id):
                 if self._active_agent == "main" or event.agent_id == self._active_agent:
-                    self._render_replayed_event(event)
+                    self._render_replayed_event(event, apply_projection=False)
             self._sync_runtime_state()
 
     def _update_all(self) -> None:
@@ -1699,367 +1722,237 @@ class AgentConsole(Screen):
         finally:
             self._busy = False
 
-    @work(exclusive=True, thread=True)
-    def _run_chat_turn(self, user_message: str) -> None:
+
+    def _make_controller(self) -> ConversationController:
+        return ConversationController(
+            self.runtime, self._conversation_harness,
+            active_run_id=self._active_run_id, model=self._selected_model,
+            on_run_changed=lambda run_id: self.app.call_from_thread(self._adopt_controller_run, run_id),
+            on_runtime_event=self._runtime_event_from_worker,
+            preview=lambda: self.app.call_from_thread(self.action_open_preview),
+            preference_memory=self._preference_memory,
+        )
+
+    def _adopt_controller_run(self, run_id: str) -> None:
+        if run_id != self._active_run_id:
+            self._stop_preview_server()
+        self._active_run_id = run_id
+        self.session.run_ids = [item for item in self.session.run_ids if item != run_id] + [run_id]
+        self._summary_run_id = ""
+        self._presentation = None
+        self._pending_approval = ""
+        self._show_run_block()
+        save_session(self.session)
+
+    def _finish_controller_turn(self) -> None:
+        """Finish UI cleanup atomically before accepting another submission."""
+        self._controller_running = False
+        self._run_started_monotonic = 0.0
+        try:
+            self._sync_runtime_state()
+        finally:
+            self._set_composer_running(False)
+            self._busy = False
+            self._update_input_placeholder()
+        self._present_pending_approval()
+        self._refresh_recovery()
+        self._refresh_memory_review()
+
+    def _refresh_recovery(self) -> None:
+        button = self.query_one("#resume-turn", Button)
+        try:
+            info = self._make_controller().recovery_info()
+        except (ValueError, RuntimeError, OSError) as exc:
+            button.display = True
+            button.disabled = True
+            self._append_error(str(exc))
+            return
+        button.display = bool(info["available"])
+        button.disabled = info.get("status") == "recovery_required"
+        if not info["available"]:
+            self._recovery_notice = ""
+        if info["available"] and str(info["message"]) != self._recovery_notice:
+            self._recovery_notice = str(info["message"])
+            self._append_system(self._recovery_notice)
+            event = HarnessEvent.create("session.interrupted", session_id=self.session.id,
+                turn_id="recovery", sequence=0, source="session", payload={"status": info.get("status")})
+            try:
+                self._event_journal.append(event)
+            except (ValueError, OSError):
+                button.disabled = True
+                self._append_error("无法保存恢复状态，已保留原事件记录；请检查记录或新建会话。")
+            self._apply_harness_projection(event)
+
+    def action_resume_turn(self) -> None:
+        if self._busy:
+            return
         self._busy = True
+        self.query_one("#resume-turn", Button).display = False
+        self._run_chat_turn("", resume=True)
+
+    @work(exclusive=True, thread=True)
+    def _run_chat_turn(self, user_message: str, *, resume: bool = False) -> None:
+        self._busy = True
+        self._controller_running = True
         self.app.call_from_thread(self._set_composer_running, True)
         self._run_started_monotonic = time.monotonic()
         self._streaming_message = None
         self.app.call_from_thread(self._begin_streaming_agent)
-
-        def on_event(event: TurnEvent) -> None:
-            self.app.call_from_thread(self._handle_conversation_event, event)
-
         try:
-            active_tools, skill_catalog = installed_capabilities()
-            reply = self._conversation_harness.run(
+            controller = self._make_controller()
+            store = self._conversation_harness.turn_store
+            saved = store.load() if store else {}
+            if resume and saved.get("status") in {None, "completed", "abandoned"}:
+                controller.resume_runtime()
+                self.app.call_from_thread(self._sync_runtime_state)
+                if self._presentation:
+                    self.app.call_from_thread(self._append_agent, self._presentation.summary_text)
+                return
+            reply = controller.run(
                 user_message,
-                system_prompt=SYSTEM_PROMPT + "\n你是 AIGC Harness 的对话控制器。先理解意图，必要时调用已安装 Skill；涉及真实外部发布必须先请求用户确认。\n\n" + skill_catalog,
-                on_event=on_event,
-                model=self._selected_model,
+                on_event=lambda event: self.app.call_from_thread(self._handle_conversation_event, event),
                 reasoning_effort=self._reasoning_effort,
-                tools=active_tools,
-                execute_tool=execute_tool,
-                allow_tool=self._allow_conversation_tool,
+                resume=resume,
             )
-            if self._streaming_message is not None:
-                self.session.messages.append({"role": "assistant", "content": reply})
+            if reply and self._harness_projection.state.terminal_reason == "completed":
+                self.session.messages.append({"role": "assistant", "content": reply, "turn_id": self._conversation_harness.last_turn_id})
                 self.session.title = auto_title(self.session.messages)
                 save_session(self.session)
         except Exception as exc:
             self.app.call_from_thread(self._append_error, friendly_error(str(exc)))
             self.app.call_from_thread(self._append_error, str(exc), detail_only=True)
         finally:
-            self._busy = False
-            self._run_started_monotonic = 0.0
-            self.app.call_from_thread(self._set_composer_running, False)
-            self.app.call_from_thread(self._update_input_placeholder)
+            self.app.call_from_thread(self._finish_controller_turn)
 
     def _handle_conversation_event(self, event: TurnEvent) -> None:
+        self._apply_harness_projection(event)
         if event.type == "model.delta":
-            self._set_activity("正在回答 · 内容持续生成中")
             self._append_stream_delta(str(event.payload.get("text", "")))
-        elif event.type == "model.started":
-            self._set_activity("正在思考 · 已连接模型")
-            self._append_system(f"正在连接模型 {event.payload.get('model', 'provider default')}…", detail_only=True)
-        elif event.type == "heartbeat":
-            self._set_activity(f"仍在思考 · 已等待 {event.payload.get('elapsed_seconds', 0)} 秒")
-            self._append_system(
-                f"模型仍在响应（已等待 {event.payload.get('elapsed_seconds', 0)} 秒）",
-                detail_only=True,
-            )
+        elif event.type == "model.first_token":
+            self._append_system(f"首 token 延迟 {event.payload.get('latency_ms', 0)} ms", detail_only=True)
+        elif event.type in {"model.stalled", "tool.stalled"}:
+            self._append_system("当前操作响应较慢；可以继续等待或按 Esc 取消。", detail_only=True)
         elif event.type == "model.completed":
-            self._set_activity("正在整理回答 · 即将完成")
-            self._append_system("模型输出完成", detail_only=True)
-        elif event.type == "tool.started":
-            name = str(event.payload.get("name", ""))
-            labels = {
-                "collect_papers": "正在搜索近期论文",
-                "rank_papers": "正在筛选候选论文",
-                "ingest_paper": "正在读取论文和图表",
-                "generate_article": "正在生成文章",
-                "run_writing_agent": "正在撰写并审阅文章",
-                "review_article": "正在检查文章质量",
-                "improve_article": "正在修改文章",
-                "create_wechat_draft": "正在准备微信草稿",
-            }
-            self._set_activity(labels.get(name, f"正在处理 · {name or '工作'}"))
-            self._append_system(f"正在执行 {event.payload.get('name', '工具')}…", detail_only=True)
-        elif event.type == "tool.completed":
-            name = str(event.payload.get("name", "工具"))
-            self._set_activity(f"已完成 · {name}")
-            self._append_system(f"已完成 {event.payload.get('name', '工具')}", detail_only=True)
+            self._append_system(f"模型输出完成 · usage={event.payload.get('usage', {})}", detail_only=True)
+        elif event.type == "memory.retrieved":
+            self._append_system(f"本轮参考 {event.payload.get('count', 0)} 条已确认偏好。", detail_only=True)
+        elif event.type == "memory.proposed":
+            self._append_system("已提出一条偏好，需你在记忆面板确认后才会跨会话使用。")
+        elif event.type in {"tool.started", "tool.completed", "tool.failed", "tool.blocked"}:
+            self._append_system(f"{event.payload.get('name', '工具')} · {event.type}", detail_only=True)
+        elif event.type == "provider.retrying":
+            self._append_system(self._harness_projection.state.activity, detail_only=True)
+        elif event.type == "provider.capability":
+            self._append_system("当前模型接口不支持推理强度设置，使用服务商默认值。")
+        elif event.type == "context.compacted":
+            self._append_system("较长历史或工具输出已压缩；当前任务和本次要求保留。", detail_only=True)
         elif event.type == "approval.required":
-            self._append_system(
-                f"工具 {event.payload.get('name', '操作')} 需要你确认；当前对话不会执行真实外部发布。"
-            )
-        elif event.type == "turn.completed":
-            self._set_activity("已完成 · 可以继续提问或修改文章")
-        elif event.type == "turn.cancelled":
-            self._set_activity("已取消 · 可以重新发送消息")
-        elif event.type == "turn.failed":
-            self._set_activity("未完成 · 可以重试当前请求")
+            self._append_system(f"工具 {event.payload.get('name', '操作')} 需要你确认；请在结果页确认外部发布。")
 
-    @staticmethod
-    def _allow_conversation_tool(name: str, arguments: dict[str, object]) -> tuple[bool, str]:
-        """Keep model-driven turns side-effect free until the user approves in the UI."""
-        if name == "create_wechat_draft" and not bool(arguments.get("dry_run", True)):
-            return False, "创建真实微信草稿必须由用户在结果页显式确认。"
-        if name == "agent_run":
-            arguments["dry_run"] = True
-        return True, ""
 
     @work(exclusive=True, thread=True)
-    def _resume_candidate(self, paper_id: str) -> None:
-        if not self._active_run_id:
-            return
+    def _run_controller_action(self, name: str, arguments: dict[str, object], message: str) -> None:
         self._busy = True
+        self._controller_running = True
+        self.app.call_from_thread(self._set_composer_running, True)
+        self._conversation_harness.memory.append("user", message)
         try:
-            self.runtime.resolve_interaction(self._active_run_id, paper_id)
-            self.app.call_from_thread(self._append_agent, "已确认论文，正在阅读证据并撰写文章……")
-            result = self.runtime.resume(self._active_run_id)
+            context = self._make_controller().perform(name, arguments)
             self.app.call_from_thread(self._sync_runtime_state)
-            if self._presentation and result.status in {"completed", "failed", "cancelled"}:
-                summary = self._presentation.summary_text
-                self.session.messages.append({"role": "assistant", "content": summary})
-                self.app.call_from_thread(self._append_run_summary)
-            if self.session.messages:
-                self.session.title = auto_title(self.session.messages)
-                save_session(self.session)
-        except Exception as exc:
-            self._last_runtime_error = f"{type(exc).__name__}: {exc}"
-            self.app.call_from_thread(self._append_error, self._last_runtime_error)
-            self.app.call_from_thread(self._sync_runtime_state)
-        finally:
-            self._busy = False
-            self.app.call_from_thread(self._update_input_placeholder)
-
-    @work(exclusive=True, thread=True)
-    def _rerun_discovery(self, message: str) -> None:
-        if not self._active_run_id:
-            return
-        self._busy = True
-        self.app.call_from_thread(self._append_agent, message)
-        try:
-            result = self.runtime.execute(self._active_run_id)
-            self.app.call_from_thread(self._sync_runtime_state)
-            if result.status == "waiting_input" and self._presentation:
-                count = len(list((self._presentation.interaction or {}).get("options", [])))
-                self.app.call_from_thread(self._append_agent, f"重新找到 {count} 篇候选论文，请选择一篇继续。")
+            summary = self._presentation.summary_text if self._presentation else str(context.get("summary", ""))
+            self._conversation_harness.memory.append("assistant", summary)
+            self.session.messages.append({"role": "assistant", "content": summary})
+            self.app.call_from_thread(self._append_agent, summary)
             save_session(self.session)
         except Exception as exc:
-            self._last_runtime_error = f"{type(exc).__name__}: {exc}"
-            self.app.call_from_thread(self._append_error, "重新寻找论文时遇到问题，请修改主题后重试。")
-            self.app.call_from_thread(self._sync_runtime_state)
-        finally:
-            self._busy = False
-            self.app.call_from_thread(self._update_input_placeholder)
-
-    @work(exclusive=True, thread=True)
-    def _run_revision(self, revision_number: int, instruction: str) -> None:
-        if not self._active_run_id:
-            return
-        self._busy = True
-        self.app.call_from_thread(self._append_agent, f"正在修改第 {revision_number} 版：{instruction}")
-        try:
-            result = self.runtime.execute(self._active_run_id)
-            self.app.call_from_thread(self._sync_runtime_state)
-            manifest = self.runtime.get_run(self._active_run_id)
-            if result.status == "completed" and self._presentation:
-                summary = f"第 {revision_number} 版已完成。\n{self._presentation.summary_text}"
-                self.session.messages.append({"role": "assistant", "content": summary})
-                self.app.call_from_thread(self._append_agent, summary)
-            elif manifest.get("fallback_revision_active"):
-                self.app.call_from_thread(self._append_error, "本次修改没有完成，上一版文章仍然可用。")
-            save_session(self.session)
-        except Exception as exc:
-            self._last_runtime_error = f"{type(exc).__name__}: {exc}"
-            self.app.call_from_thread(self._append_error, "本次修改没有完成，上一版文章仍然可用。")
-            self.app.call_from_thread(self._sync_runtime_state)
-        finally:
-            self._busy = False
-            self.app.call_from_thread(self._update_input_placeholder)
-
-    @work(exclusive=True, thread=True)
-    def _start_draft_creation(self, article_json: str, quality: dict[str, object]) -> None:
-        self._busy = True
-        try:
-            created = self.runtime.create_run(
-                RunRequest("publish-existing", {"article_json": article_json, "quality": quality}, dry_run=False),
-                session_id=self.session.id,
-            )
-            self._active_run_id = created.run_id
-            self.session.run_ids.append(created.run_id)
-            self._presentation = None
-            self._summary_run_id = ""
-            self.runtime.subscribe(created.run_id, self._runtime_event_from_worker)
-            self.runtime.execute(created.run_id)
-            self.app.call_from_thread(self._sync_runtime_state)
-            save_session(self.session)
-        except Exception as exc:
-            self._last_runtime_error = f"{type(exc).__name__}: {exc}"
-            self.app.call_from_thread(self._append_error, friendly_error(self._last_runtime_error))
-            self.app.call_from_thread(self._append_error, self._last_runtime_error, detail_only=True)
-        finally:
-            self._busy = False
-            self.app.call_from_thread(self._update_input_placeholder)
-
-    @work(exclusive=True, thread=True)
-    def _run_agent(self, user_message: str) -> None:
-        self._busy = True
-        self._run_started_monotonic = time.monotonic()
-        self._last_runtime_error = ""
-        try:
-            workflow_id, inputs = self._runtime_request(user_message)
-            real_publish = workflow_id == "paper-to-wechat" and (
-                self._real_mode or any(word in user_message for word in ("真实", "正式发布", "真实草稿"))
-            )
-            created = self.runtime.create_run(
-                RunRequest(workflow_id, inputs, dry_run=not real_publish, model=self._selected_model),
-                session_id=self.session.id,
-            )
-            self.app.call_from_thread(self._stop_preview_server)
-            self._active_run_id = created.run_id
-            if created.run_id not in self.session.run_ids:
-                self.session.run_ids.append(created.run_id)
-            self._summary_run_id = ""
-            self._presentation = None
-            self.run_state.start(workflow_id)
-            self.app.call_from_thread(self._append_agent, "OpenMuse：正在处理你的研究任务……")
-            self.app.call_from_thread(self._show_run_block)
-            self.runtime.subscribe(created.run_id, self._runtime_event_from_worker)
-            result = self.runtime.execute(created.run_id)
-            manifest = self.runtime.get_run(created.run_id)
-            if result.status == "cancelled" and manifest.get("restart_requested"):
-                manifest["restart_requested"] = False
-                self.runtime.store.save(created.run_id, manifest)
-                result = self.runtime.resume(created.run_id)
-            self.app.call_from_thread(self._sync_runtime_state)
-            if self._presentation:
-                if result.status == "waiting_input":
-                    count = len(list((self._presentation.interaction or {}).get("options", [])))
-                    summary = f"OpenMuse：找到 {count} 篇候选论文，请选择一篇继续。"
-                    self.session.messages.append({"role": "assistant", "content": summary})
-                else:
-                    summary = self._presentation.summary_text
-                    self.session.messages.append({"role": "assistant", "content": summary})
-                    self.app.call_from_thread(self._append_run_summary)
-
-            # Auto-save
-            if self.session.messages:
-                self.session.title = auto_title(self.session.messages)
-                save_session(self.session)
-                self.app.call_from_thread(self._update_sidebar)
-
-        except RuntimeError as exc:
-            self.run_state.status = RunStatus.FAILED
-            self._last_runtime_error = str(exc)
             self.app.call_from_thread(self._append_error, friendly_error(str(exc)))
-            self.app.call_from_thread(self._append_error, str(exc), detail_only=True)
-            self.app.call_from_thread(self._update_all)
-        except Exception as exc:
-            self.run_state.status = RunStatus.FAILED
-            self._last_runtime_error = f"{type(exc).__name__}: {exc}"
-            self.app.call_from_thread(self._append_error, friendly_error(self._last_runtime_error))
-            self.app.call_from_thread(self._append_error, self._last_runtime_error, detail_only=True)
-            self.app.call_from_thread(self._update_all)
         finally:
-            self._busy = False
-            self._run_started_monotonic = 0.0
-            self.app.call_from_thread(self._update_input_placeholder)
+            self.app.call_from_thread(self._finish_controller_turn)
 
-    def _runtime_request(self, message: str) -> tuple[str, dict[str, object]]:
-        lower = message.lower()
-        if any(word in lower for word in ("微信", "公众号", "wechat", "发布", "草稿")):
-            workflow_id = "paper-to-wechat"
-        elif any(word in lower for word in ("写", "解读", "article", "深度")):
-            workflow_id = "paper-to-article"
-        elif any(word in lower for word in ("日报", "周报", "digest", "趋势")):
-            workflow_id = "daily-digest"
-        elif any(word in lower for word in ("只研究", "只解析", "提取证据", "paper research")):
-            workflow_id = "paper-research"
-        else:
-            workflow_id = "paper-to-article"
-        url = re.search(r"https?://(?:www\.)?arxiv\.org/(?:abs|pdf)/[^\s]+", message)
-        paper_id_match = re.search(r"(?<!\d)(\d{4}\.\d{4,5}(?:v\d+)?)(?!\d)", message)
-        topic = "agents"
-        for candidate in ("multimodal", "reasoning", "nlp", "vision", "agents"):
-            if candidate in lower:
-                topic = candidate
-                break
-        inputs: dict[str, object] = {
-            "request": message,
-            "topic": topic,
-            "query": message if not url and not paper_id_match else None,
-            "days": 30,
-            "top_k": 10,
-            "candidate_count": 3,
-            "ranking_profile": "balanced",
-        }
-        if "离线示例" in message or "offline example" in lower:
-            inputs["offline_example"] = True
-        if url:
-            inputs["paper_url"] = url.group(0).rstrip(".,，。")
-        elif paper_id_match:
-            inputs["paper_id"] = paper_id_match.group(1)
-        return workflow_id, inputs
+    def _resume_candidate(self, paper_id: str) -> None:
+        self._busy = True
+        self._run_controller_action("select_candidate", {"paper_id": paper_id}, f"选择论文 {paper_id}")
+
+    @work(exclusive=True, thread=True)
+    def _run_offline_example(self, message: str) -> None:
+        self._busy = True
+        self.app.call_from_thread(self._append_system, "离线示例模式：不使用模型理解意图，不代表真实模型生成质量。")
+        try:
+            workflow, inputs = offline_request(message)
+            created = self.runtime.create_run(
+                RunRequest(workflow, inputs, dry_run=True), session_id=self.session.id,
+            )
+            self.app.call_from_thread(self._adopt_controller_run, created.run_id)
+            unsubscribe = self.runtime.subscribe(created.run_id, self._runtime_event_from_worker)
+            try:
+                self.runtime.execute(created.run_id)
+            finally:
+                unsubscribe()
+            self.app.call_from_thread(self._sync_runtime_state)
+            save_session(self.session)
+        except Exception as exc:
+            self.app.call_from_thread(self._append_error, friendly_error(str(exc)))
+        finally:
+            self.app.call_from_thread(self._finish_controller_turn)
+
 
     def _runtime_event_from_worker(self, event: RunEvent) -> None:
-        self.app.call_from_thread(self._handle_runtime_event, event)
+        self.app.call_from_thread(self._handle_runtime_event, normalize_event(event))
 
-    def _render_replayed_event(self, event: RunEvent) -> None:
+    def _render_replayed_event(self, event: RunEvent, *, apply_projection: bool = True) -> None:
+        if apply_projection:
+            self._apply_harness_projection(event)
+        self._render_runtime_details(event)
+
+    def _render_runtime_details(self, event: RunEvent) -> None:
+        """One detail renderer for live and replay; activity belongs to Projection."""
         payload = event.payload
-        if event.type == "step.started":
-            phase = {
-                "collect": "正在寻找研究材料",
-                "rank": "正在筛选候选论文",
-                "select": "正在确认论文",
-                "ingest": "正在读取论文和图表",
-                "write": "正在撰写文章",
-                "review": "正在检查文章质量",
-                "publish": "正在准备发布包",
-            }
-            step_name = str(payload.get("step", ""))
-            self._set_activity(phase.get(step_name, f"正在处理 · {step_name or '当前阶段'}"))
-            self._append_step(event.agent_id, f"Running {payload.get('step')}")
-        elif event.type == "step.completed":
-            self._set_activity(f"已完成 · {payload.get('step', '当前阶段')}")
-            self._append_step(event.agent_id, f"Completed {payload.get('step')}")
+        if event.type in {"step.started", "step.completed"}:
+            self._append_step(event.agent_id, f"{event.type}: {payload.get('step')}")
         elif event.type == "tool.started":
             self._append_tool(str(payload.get("tool", "tool")), "Started", detail_only=True)
         elif event.type == "tool.completed":
             self._append_collapsed_tool(event)
         elif event.type == "artifact.created":
             self._append_artifact(str(payload.get("path", "")), str(payload.get("producer", "")))
-        elif event.type in {"tool.failed", "step.failed"}:
-            self._last_runtime_error = str(payload.get("error", "Runtime failed"))
-            self._append_error(self._last_runtime_error, detail_only=True)
-        elif event.type == "run.failed":
-            self._last_runtime_error = str(payload.get("error", "Runtime failed"))
-            self._append_error(friendly_error(self._last_runtime_error))
-            self._append_error(self._last_runtime_error, detail_only=True)
-            self._set_activity("未完成 · 已保留当前产物，可以检查失败原因后重试")
+        elif event.type in {"tool.failed", "step.failed", "run.failed"}:
+            error = str(payload.get("error", "任务未完成"))
+            if event.type == "run.failed":
+                self._append_error(friendly_error(error))
+            self._append_error(error, detail_only=True)
+        elif event.type == "agent.started":
+            self._append_agent(f"{event.agent_id} started", detail_only=True)
         elif event.type == "approval.required":
             self._pending_approval = str(payload.get("id", ""))
         elif event.type == "interaction.required":
             self._append_agent("候选论文已经准备好，请选择一篇继续。")
 
     def _handle_runtime_event(self, event: RunEvent) -> None:
-        if self._active_agent != "main" and event.agent_id != self._active_agent:
-            self._sync_runtime_state()
-            return
-        payload = event.payload
-        if event.type == "step.started":
-            self._append_step(event.agent_id, f"Running {payload.get('step')}")
-        elif event.type == "step.completed":
-            self._append_step(event.agent_id, f"Completed {payload.get('step')}")
-        elif event.type == "tool.started":
-            self._append_tool(str(payload.get("tool", "tool")), "Started", detail_only=True)
-        elif event.type == "tool.completed":
-            self._append_collapsed_tool(event)
-        elif event.type == "artifact.created":
-            self._append_artifact(str(payload.get("path", "")), str(payload.get("producer", "")))
-        elif event.type in {"tool.failed", "step.failed"}:
-            self._last_runtime_error = str(payload.get("error", "Runtime failed"))
-            self._append_error(self._last_runtime_error, detail_only=True)
-        elif event.type == "run.failed":
-            self._last_runtime_error = str(payload.get("error", "Runtime failed"))
-            self._append_error(friendly_error(self._last_runtime_error))
-            self._append_error(self._last_runtime_error, detail_only=True)
-        elif event.type == "agent.started":
-            self._append_agent(f"{event.agent_id} started", detail_only=True)
-        elif event.type == "approval.required":
-            self._pending_approval = str(payload.get("id", ""))
-            self.app.push_screen(ApprovalModal(payload), self._approval_decision)
-        elif event.type == "interaction.required":
-            self._set_activity("等待选择 · 请在上方候选中确认一篇论文")
-            self._append_agent("候选论文已经准备好，请选择一篇继续。")
-        elif event.type == "run.completed":
-            self._last_runtime_error = ""
-            self._set_activity("已完成 · 文章已自动保存，可以继续修改或预览")
+        self._apply_harness_projection(event)
+        if self._active_agent == "main" or event.agent_id == self._active_agent:
+            self._render_runtime_details(event)
+        if event.type == "approval.required":
+            self._pending_approval = str(event.payload.get("id", ""))
+            if not self._controller_running:
+                self.app.push_screen(ApprovalModal(event.payload), self._approval_decision)
         self._sync_runtime_state()
-        if event.type in {"run.completed", "run.failed"}:
+        if event.type in {"run.completed", "run.failed", "run.cancelled"} and not self._controller_running:
             self._append_run_summary()
+
+    def _apply_harness_projection(self, event: object) -> None:
+        """Reduce both live event types through the same UI projection."""
+        normalized = normalize_event(event)
+        if normalized.source == "runtime":
+            self._event_journal.append(normalized)
+        state = self._harness_projection.apply(normalized)
+        if state.activity:
+            self._set_activity(state.activity)
+        if state.status == "failed" and state.last_error:
+            self._last_runtime_error = state.last_error
+        elif state.status in {"running", "completed", "cancelled"}:
+            self._last_runtime_error = ""
+        self._update_session_bar()
+
 
     def _append_collapsed_tool(self, event: RunEvent) -> None:
         payload = event.payload
@@ -2075,26 +1968,41 @@ class AgentConsole(Screen):
             detail_only=True,
         )
 
+    def _present_pending_approval(self) -> None:
+        # Do not start an exclusive approval worker while a model turn is
+        # still summarizing the request: that would cancel its live worker.
+        if not self._pending_approval or not self._active_run_id:
+            return
+        manifest = self.runtime.get_run(self._active_run_id)
+        approval = manifest.get("approvals", {}).get(self._pending_approval, {})
+        if manifest["status"] == "waiting_approval" and approval.get("status") == "pending":
+            self.app.push_screen(ApprovalModal(approval), self._approval_decision)
+
     def _approval_decision(self, approved: bool | None) -> None:
         if self._pending_approval:
+            self._busy = True
             self._resolve_approval(self._pending_approval, bool(approved))
+
 
     @work(exclusive=True, thread=True)
     def _resolve_approval(self, approval_id: str, approved: bool) -> None:
-        if not self._active_run_id:
-            return
-        self.runtime.resolve_approval(self._active_run_id, approval_id, approved)
-        self._pending_approval = ""
-        if approved:
-            result = self.runtime.execute(self._active_run_id)
+        self._busy = True
+        self._controller_running = True
+        self.app.call_from_thread(self._set_composer_running, True)
+        try:
+            self._make_controller().resolve_approval(approval_id, approved)
+            self._pending_approval = ""
             self.app.call_from_thread(self._sync_runtime_state)
-            if result.status == "completed" and self._presentation:
-                summary = self._presentation.summary_text
-                self.session.messages.append({"role": "assistant", "content": summary})
-                self.app.call_from_thread(self._append_agent, summary)
-                save_session(self.session)
-        else:
-            self.app.call_from_thread(self._sync_runtime_state)
+            summary = self._presentation.summary_text if self._presentation else "已处理审批。"
+            self._conversation_harness.memory.append("user", "确认创建微信草稿" if approved else "拒绝创建微信草稿")
+            self._conversation_harness.memory.append("assistant", summary)
+            self.session.messages.append({"role": "assistant", "content": summary})
+            self.app.call_from_thread(self._append_agent, summary)
+            save_session(self.session)
+        except Exception as exc:
+            self.app.call_from_thread(self._append_error, friendly_error(str(exc)))
+        finally:
+            self.app.call_from_thread(self._finish_controller_turn)
 
     def _sync_runtime_state(self) -> None:
         if not self._active_run_id:
@@ -2116,6 +2024,7 @@ class AgentConsole(Screen):
             "waiting_input": RunStatus.RUNNING,
             "cancelling": RunStatus.RUNNING,
             "cancelled": RunStatus.FAILED,
+            "recovery_required": RunStatus.FAILED,
             "failed": RunStatus.FAILED,
             "completed": RunStatus.SUCCESS,
         }

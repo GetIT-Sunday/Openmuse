@@ -68,23 +68,45 @@ class RunStore:
     def append_event(self, event: RunEvent) -> None:
         line = json.dumps(event.to_dict(), ensure_ascii=False, separators=(",", ":")) + "\n"
         with self._lock:
-            with (self.run_dir(event.run_id) / "events.jsonl").open("a", encoding="utf-8") as handle:
+            path = self.run_dir(event.run_id) / "events.jsonl"
+            _, valid_bytes, tail = self._read_events(event.run_id)
+            if tail:
+                path.with_name(f"{path.name}.torn-{uuid.uuid4().hex}").write_bytes(tail)
+                with path.open("r+b") as handle:
+                    handle.truncate(valid_bytes)
+            with path.open("a", encoding="utf-8") as handle:
+                if valid_bytes:
+                    with path.open("rb") as reader:
+                        reader.seek(-1, 2)
+                        if reader.read(1) != b"\n":
+                            handle.write("\n")
                 handle.write(line)
                 handle.flush()
                 os.fsync(handle.fileno())
 
     def events(self, run_id: str, after: int = 0) -> list[RunEvent]:
+        rows, _, _ = self._read_events(run_id)
+        return [row for row in rows if row.sequence > after]
+
+    def _read_events(self, run_id: str) -> tuple[list[RunEvent], int, bytes]:
         path = self.run_dir(run_id) / "events.jsonl"
         if not path.exists():
-            return []
+            return [], 0, b""
         rows: list[RunEvent] = []
-        for line in path.read_text(encoding="utf-8").splitlines():
-            if not line.strip():
-                continue
-            event = RunEvent.from_dict(json.loads(line))
-            if event.sequence > after:
-                rows.append(event)
-        return rows
+        valid_bytes = 0
+        lines = path.read_bytes().splitlines(keepends=True)
+        for index, line in enumerate(lines):
+            try:
+                if line.strip():
+                    rows.append(RunEvent.from_dict(json.loads(line)))
+            except (UnicodeDecodeError, json.JSONDecodeError):
+                if index == len(lines) - 1 and not line.endswith(b"\n"):
+                    return rows, valid_bytes, line
+                raise ValueError("任务事件记录中间损坏，已停止恢复并保留原文件。") from None
+            except (TypeError, ValueError):
+                raise ValueError("任务事件记录格式无效，已停止恢复并保留原文件。") from None
+            valid_bytes += len(line)
+        return rows, valid_bytes, b""
 
     def checkpoint(self, run_id: str, step_id: str, payload: dict[str, Any]) -> Path:
         path = self.run_dir(run_id) / "checkpoints" / f"{step_id}.json"

@@ -63,11 +63,11 @@ class HarnessTests(unittest.TestCase):
             reply = harness.run("写一篇", system_prompt="你是助手", on_event=events.append, model="test")
         self.assertEqual(reply, "第一段第二段")
         self.assertEqual([event.type for event in events], [
-            "turn.started", "context.prepared", "model.started", "model.delta",
+            "turn.started", "context.prepared", "model.started", "model.first_token", "model.delta",
             "model.delta", "model.completed", "turn.completed",
         ])
-        self.assertEqual([event.sequence for event in events], list(range(1, 8)))
-        self.assertEqual(events[3].payload["text"], "第一段")
+        self.assertEqual([event.sequence for event in events], list(range(1, 9)))
+        self.assertEqual(events[4].payload["text"], "第一段")
 
     def test_harness_passes_reasoning_effort_to_streaming_provider(self) -> None:
         captured = {}

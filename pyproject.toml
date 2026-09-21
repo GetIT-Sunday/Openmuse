@@ -1,11 +1,11 @@
 [build-system]
-requires = ["setuptools>=68", "wheel"]
+requires = ["setuptools>=77", "wheel"]
 build-backend = "setuptools.build_meta"
 
 [project]
 name = "smearglepaper"
 version = "0.2.0"
-description = "Turn AI papers into structured Chinese article drafts with PDF parsing, figure extraction, WeChat draft support, and MCP tools."
+description = "OpenMuse: a recoverable AIGC Harness with portable Skills, research-to-article workflows, and reviewable WeChat drafts."
 readme = "README.md"
 requires-python = ">=3.10"
 license = "MIT"
@@ -37,6 +37,7 @@ dependencies = [
 [project.optional-dependencies]
 mcp = ["mcp>=1.9.0"]
 dev = [
+  "build>=1.2,<2",
   "pytest==8.3.3",
   "pytest-cov==5.0.0",
   "mcp==1.9.4",
@@ -61,6 +62,25 @@ testpaths = ["tests"]
 target-version = "py310"
 line-length = 140
 include = [
+  "scripts/check_release.py",
+  "tests/test_stage8_release.py",
+  "scripts/evaluate_harness.py",
+  "scripts/eval_support/*.py",
+  "tests/test_stage7_*.py",
+  "src/smearglepaper/conversation.py",
+  "src/smearglepaper/context_budget.py",
+  "src/smearglepaper/preference_memory.py",
+  "src/smearglepaper/preference_ui.py",
+  "tests/test_stage6_memory.py",
+  "src/smearglepaper/turn_store.py",
+  "tests/test_stage5_recovery.py",
+  "tests/test_conversation.py",
+  "src/smearglepaper/providers.py",
+  "src/smearglepaper/cancellation.py",
+  "src/smearglepaper/harness.py",
+  "src/smearglepaper/harness_events.py",
+  "src/smearglepaper/harness_projection.py",
+  "tests/test_stage3_harness.py",
   "src/smearglepaper/runtime/**/*.py",
   "src/smearglepaper/cli.py",
   "src/smearglepaper/tui.py",
@@ -79,7 +99,7 @@ ignore = ["E501"]
 
 [tool.mypy]
 python_version = "3.10"
-files = ["src/smearglepaper/runtime"]
+files = ["src/smearglepaper/runtime", "src/smearglepaper/conversation.py", "src/smearglepaper/providers.py", "src/smearglepaper/cancellation.py", "src/smearglepaper/harness.py", "src/smearglepaper/harness_events.py", "src/smearglepaper/harness_projection.py", "src/smearglepaper/context_budget.py", "src/smearglepaper/turn_store.py", "src/smearglepaper/preference_memory.py", "src/smearglepaper/preference_ui.py"]
 explicit_package_bases = true
 follow_imports = "skip"
 warn_unused_ignores = true

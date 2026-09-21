@@ -35,6 +35,10 @@
 <p align="center">
   <img src="docs/audits/harness-screenshots/136x51-initial.svg" alt="OpenMuse TUI initial screen" width="820">
 </p>
+
+<p align="center">
+  <sub>OpenMuse TUI 状态基线：初始、运行、完成、失败和等待选择，覆盖 80×24、136×51、156×54 终端尺寸。</sub>
+</p>
 ---
 ## ✨ 功能特性
 

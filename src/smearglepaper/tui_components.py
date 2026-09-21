@@ -1,4 +1,4 @@
-"""Reusable TUI components for SmearglePaper Agent Console."""
+"""Reusable TUI components for the OpenMuse Harness console."""
 from __future__ import annotations
 
 import re
@@ -28,7 +28,7 @@ OPENMUSE_LOGO = "OpenMuse"
 # first official Pack, while OpenMuse is the Harness brand.
 AUTOWECHAT_LOGO = OPENMUSE_LOGO
 
-# ── AutoWechat Effect Stage ─────────────────────────────────────────────
+# ── OpenMuse Effect Stage ────────────────────────────────────────────────
 
 class AutoWechatStage(Vertical):
     """Primary canvas for workflow progress and generated artifacts."""
@@ -139,6 +139,7 @@ class AutoWechatStage(Vertical):
             "running": ("正在处理", "#eab308"),
             "waiting_input": ("等待选择", "#eab308"),
             "waiting_approval": ("等待确认", "#eab308"),
+            "recovery_required": ("需要核对结果", "#eab308"),
             "cancelling": ("正在取消", "#eab308"),
             "completed": ("已完成", "#22c55e"),
             "failed": ("未完成", "#ef4444"),
@@ -368,7 +369,7 @@ class HeaderBar(Static):
         if len(model_str) > 28:
             model_str = model_str[:26] + "…"
         self.update(
-            f"[bold #f59e0b]SmearglePaper[/bold #f59e0b]"
+            f"[bold #f59e0b]OpenMuse[/bold #f59e0b]"
             f"  │  Session: [#22d3ee]{self._session_id}[/]"
             f"  │  Model: [#d7dde8]{model_str}[/]"
             f"  │  Mode: [{mc}]{self._mode}[/]"
@@ -537,7 +538,7 @@ class WelcomeWidget(Vertical):
 
     def compose(self) -> ComposeResult:
         yield Static(
-            "[bold #f59e0b]SmearglePaper[/bold #f59e0b]\n"
+            "[bold #f59e0b]OpenMuse[/bold #f59e0b]\n"
             "[#7d8596]Research Agent for Papers, Articles and WeChat Drafts[/]\n"
             "\n"
             "[bold #22d3ee]Quick Start[/]\n"
@@ -635,6 +636,10 @@ COMMANDS = [
     ("reasoning", "设置模型推理强度"),
     ("session", "打开、创建或删除会话"),
     ("diagnose", "查看脱敏连接与运行诊断"),
+    ("offline", "运行离线示例（不调用模型）"),
+    ("resume", "安全继续中断的对话或任务"),
+    ("memory", "确认、编辑或忘记跨会话写作偏好"),
+    ("forget", "清空本会话上下文；加 ID 可忘记一条偏好"),
     ("preview", "打开手机文章预览"),
     ("collect-arxiv", "搜索 arXiv 论文"),
     ("rank-papers", "为论文排序"),

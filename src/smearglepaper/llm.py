@@ -2,12 +2,14 @@ from __future__ import annotations
 
 import json
 import sys
+import threading
 import urllib.request
 import uuid
 from collections.abc import Callable, Iterator
 from typing import Any
 from urllib.error import HTTPError
 
+from .cancellation import Cancelled, current_token
 from .collector import ssl_context
 from .config import env
 from .evidence import format_evidence_context
@@ -59,6 +61,8 @@ class ArticleWriter:
                 notes = self._call_model("你是严谨的论文阅读助手，只输出结构化中文要点。", notes_prompt(paper, context), temperature=0.2)
                 outline = self._call_model("你是科技文章编辑，只输出清晰的文章大纲。", outline_prompt(paper, notes), temperature=0.3)
                 return self._call_model("你是严谨的中文科技作者，输出适合微信公众号的 Markdown 深度解读。", article_prompt(paper, notes, outline), temperature=0.45)
+            except Cancelled:
+                raise
             except Exception as exc:  # noqa: BLE001 - local fallback remains available
                 print(
                     f"Warning: LLM article generation failed; using local template: {type(exc).__name__}: {exc}",
@@ -71,60 +75,19 @@ class ArticleWriter:
         return self._write_locally(paper, build_context(paper, parsed))
 
     def _call_model(self, system: str, user: str, temperature: float) -> str:
-        provider = _detect_api_provider()
-        if provider == "anthropic":
-            return self._call_anthropic(system, user, temperature)
-        return self._call_openai(system, user, temperature)
-
-    def _call_openai(self, system: str, user: str, temperature: float) -> str:
-        base = chat_completions_base_url(env("OPENAI_BASE_URL"))
-        max_tokens = int(env("LLM_MAX_TOKENS", "8192"))
-        payload = {
-            "model": self.model or env("OPENAI_MODEL", "deepseek-chat"),
-            "messages": [
-                {"role": "system", "content": system},
-                {"role": "user", "content": user},
-            ],
-            "temperature": temperature,
-            "max_tokens": max_tokens,
-        }
-        req = urllib.request.Request(
-            f"{base}/chat/completions",
-            data=json.dumps(payload).encode("utf-8"),
-            headers=openai_request_headers(env("OPENAI_API_KEY"), base_url=base),
-            method="POST",
+        result = stream_chat(
+            [{"role": "system", "content": system}, {"role": "user", "content": user}],
+            model=self.model, temperature=temperature, max_tokens=int(env("LLM_MAX_TOKENS", "8192")),
         )
-        with urllib.request.urlopen(req, timeout=_llm_timeout(), context=ssl_context()) as response:
-            data = json.loads(response.read().decode("utf-8"))
-        self._record_usage(data.get("usage", {}), "prompt_tokens", "completion_tokens")
-        return data["choices"][0]["message"]["content"]
-
-    def _call_anthropic(self, system: str, user: str, temperature: float) -> str:
-        base_url = env("ANTHROPIC_BASE_URL").rstrip("/")
-        payload = {
-            "model": self.model or env("ANTHROPIC_MODEL", "claude-sonnet-4-20250514"),
-            "max_tokens": int(env("LLM_MAX_TOKENS", "8192")),
-            "temperature": temperature,
-            "system": system,
-            "messages": [{"role": "user", "content": user}],
-        }
-        req = urllib.request.Request(
-            f"{base_url}/v1/messages",
-            data=json.dumps(payload).encode("utf-8"),
-            headers={
-                "x-api-key": env("ANTHROPIC_API_KEY"),
-                "anthropic-version": "2023-06-01",
-                "Content-Type": "application/json",
-            },
-            method="POST",
-        )
-        with urllib.request.urlopen(req, timeout=_llm_timeout(), context=ssl_context()) as response:
-            data = json.loads(response.read().decode("utf-8"))
-        self._record_usage(data.get("usage", {}), "input_tokens", "output_tokens")
-        for block in data.get("content", []):
-            if block.get("type") == "text":
-                return block["text"]
-        return ""
+        token = current_token()
+        if token:
+            token.check()
+        if result.get("cancelled"):
+            raise Cancelled()
+        self._record_usage(result.get("usage", {}),
+                           "input_tokens" if _detect_api_provider() == "anthropic" else "prompt_tokens",
+                           "output_tokens" if _detect_api_provider() == "anthropic" else "completion_tokens")
+        return str(result.get("content", ""))
 
     def _record_usage(self, usage: object, input_key: str, output_key: str) -> None:
         if not isinstance(usage, dict):
@@ -416,13 +379,13 @@ def chat_with_tools(
       - tool_calls: list[dict]  (tool calls requested by the LLM, if any)
       - finish_reason: str
     """
-    provider = _detect_api_provider()
-    if provider == "anthropic":
-        return _chat_anthropic(messages, tools, model, temperature, max_tokens)
-    elif provider == "openai":
-        return _chat_openai(messages, tools, model, temperature, max_tokens)
-    else:
-        raise RuntimeError("No LLM configured. Set ANTHROPIC_API_KEY + ANTHROPIC_BASE_URL or OPENAI_API_KEY + OPENAI_BASE_URL.")
+    result = stream_chat(messages, tools=tools, model=model, temperature=temperature, max_tokens=max_tokens)
+    token = current_token()
+    if token:
+        token.check()
+    if result.get("cancelled"):
+        raise Cancelled()
+    return result
 
 
 def stream_chat(
@@ -435,262 +398,39 @@ def stream_chat(
     on_delta: Callable[[str], None] | None = None,
     session_id: str | None = None,
     reasoning_effort: str = "default",
+    cancel_event: threading.Event | None = None,
+    on_provider_event: Callable[[str, dict[str, object]], None] | None = None,
 ) -> dict[str, object]:
-    """Stream a text turn from an OpenAI-compatible provider.
+    """Compatibility entry point backed by the shared Provider adapter contract."""
+    from .cancellation import CancellationToken, current_token
+    from .providers import AnthropicAdapter, OpenAIAdapter, ProviderAdapter, ProviderError, stream
 
-    The gateway deliberately exposes a small provider-neutral contract. The
-    caller receives incremental text through ``on_delta`` and a final result
-    containing the accumulated content, usage and finish reason.
-    """
-    if _detect_api_provider() != "openai":
-        raise RuntimeError("Streaming currently requires an OpenAI-compatible provider.")
-    base = chat_completions_base_url(env("OPENAI_BASE_URL"))
-    payload: dict[str, object] = {
-        "model": model or env("OPENAI_MODEL", "deepseek-chat"),
-        "messages": messages,
-        "temperature": temperature,
-        "max_tokens": max_tokens,
-        "stream": True,
-        "stream_options": {"include_usage": True},
-    }
-    if tools:
-        payload["tools"] = tools
-        payload["tool_choice"] = "auto"
-    if reasoning_effort in {"low", "medium", "high"}:
-        payload["reasoning_effort"] = reasoning_effort
-    req = urllib.request.Request(
-        f"{base}/chat/completions",
-        data=json.dumps(payload).encode("utf-8"),
-        headers={
-            **openai_request_headers(env("OPENAI_API_KEY"), session_id=session_id, base_url=base),
-            "Accept": "text/event-stream",
-        },
-        method="POST",
-    )
-    content: list[str] = []
-    usage: dict[str, object] = {}
-    finish_reason = ""
-    tool_calls: dict[int, dict[str, object]] = {}
-    with urllib.request.urlopen(req, timeout=_llm_timeout(), context=ssl_context()) as response:
-        for event in _iter_sse_json(response):
-            choices = event.get("choices", [])
-            if choices:
-                choice = choices[0] if isinstance(choices[0], dict) else {}
-                delta = choice.get("delta", {})
-                text = delta.get("content") if isinstance(delta, dict) else None
-                if isinstance(text, str) and text:
-                    content.append(text)
-                    if on_delta:
-                        on_delta(text)
-                reason = choice.get("finish_reason")
-                if reason:
-                    finish_reason = str(reason)
-                raw_calls = choice.get("delta", {}).get("tool_calls", []) if isinstance(choice.get("delta", {}), dict) else []
-                for raw_call in raw_calls if isinstance(raw_calls, list) else []:
-                    if not isinstance(raw_call, dict):
-                        continue
-                    index = int(raw_call.get("index", 0))
-                    call = tool_calls.setdefault(index, {"id": "", "name": "", "arguments": ""})
-                    if raw_call.get("id"):
-                        call["id"] = str(raw_call["id"])
-                    function = raw_call.get("function", {})
-                    if isinstance(function, dict):
-                        if function.get("name"):
-                            call["name"] = str(function["name"])
-                        if function.get("arguments"):
-                            call["arguments"] = str(call["arguments"]) + str(function["arguments"])
-            if isinstance(event.get("usage"), dict):
-                usage = dict(event["usage"])
-    parsed_calls: list[dict[str, object]] = []
-    for call in tool_calls.values():
-        try:
-            arguments = json.loads(str(call["arguments"])) if call["arguments"] else {}
-        except json.JSONDecodeError:
-            arguments = {}
-        parsed_calls.append({"id": call["id"], "name": call["name"], "arguments": arguments})
-    return {
-        "content": "".join(content),
-        "usage": usage,
-        "finish_reason": finish_reason or "stop",
-        "tool_calls": parsed_calls,
-    }
+    provider = _detect_api_provider()
+    adapter: ProviderAdapter
+    if provider == "anthropic":
+        adapter = AnthropicAdapter(env("ANTHROPIC_BASE_URL"), env("ANTHROPIC_API_KEY"))
+        resolved_model = model or env("ANTHROPIC_MODEL", "claude-sonnet-4-20250514")
+    elif provider == "openai":
+        base = chat_completions_base_url(env("OPENAI_BASE_URL"))
+        adapter = OpenAIAdapter(base, openai_request_headers(env("OPENAI_API_KEY"), session_id, base))
+        resolved_model = model or env("OPENAI_MODEL", "deepseek-chat")
+    else:
+        raise ProviderError("configuration", "尚未配置模型服务，请先连接模型。")
+    token = CancellationToken(parent=current_token(), event=cancel_event)
+    return stream(adapter, messages, {
+        "model": resolved_model, "tools": tools, "temperature": temperature,
+        "max_tokens": max_tokens, "reasoning_effort": reasoning_effort,
+    }, token=token, on_delta=on_delta, notify=on_provider_event or (lambda *_: None), timeout=_llm_timeout())
 
 
-def _iter_sse_json(response: object) -> Iterator[dict[str, object]]:
-    """Yield JSON payloads from an SSE response, ignoring comments/keepalives."""
-    for raw in response:  # type: ignore[union-attr]
-        line = raw.decode("utf-8", errors="replace").strip()
-        if not line or line.startswith(":") or not line.startswith("data:"):
-            continue
-        payload = line[5:].strip()
-        if payload == "[DONE]":
-            return
-        try:
-            value = json.loads(payload)
-        except json.JSONDecodeError:
-            continue
-        if isinstance(value, dict):
-            yield value
+def _iter_sse_json(response: Any) -> Iterator[dict[str, object]]:
+    """Compatibility import for the shared SSE parser."""
+    from .providers import iter_sse
+
+    yield from iter_sse(response)
 
 
-def _chat_openai(
-    messages: list[dict[str, object]],
-    tools: list[dict[str, object]],
-    model: str | None,
-    temperature: float,
-    max_tokens: int,
-) -> dict[str, object]:
-    """OpenAI-compatible API call with function calling."""
-    base_url = env("OPENAI_BASE_URL")
-    api_key = env("OPENAI_API_KEY")
-    resolved_model = model or env("OPENAI_MODEL", "deepseek-chat")
-    base = chat_completions_base_url(base_url)
-    payload: dict[str, object] = {
-        "model": resolved_model,
-        "messages": messages,
-        "tools": tools,
-        "tool_choice": "auto",
-        "temperature": temperature,
-        "max_tokens": max_tokens,
-    }
-    req = urllib.request.Request(
-        f"{base}/chat/completions",
-        data=json.dumps(payload).encode("utf-8"),
-        headers=openai_request_headers(api_key, base_url=base_url),
-        method="POST",
-    )
-    with urllib.request.urlopen(req, timeout=_llm_timeout(), context=ssl_context()) as response:
-        data = json.loads(response.read().decode("utf-8"))
 
-    choice = data["choices"][0]
-    message = choice["message"]
-    finish_reason = choice.get("finish_reason", "stop")
-
-    result: dict[str, object] = {"content": message.get("content"), "tool_calls": [], "finish_reason": finish_reason}
-    raw_tool_calls = message.get("tool_calls", [])
-    if raw_tool_calls:
-        result["tool_calls"] = [
-            {
-                "id": tc["id"],
-                "name": tc["function"]["name"],
-                "arguments": json.loads(tc["function"]["arguments"]) if isinstance(tc["function"]["arguments"], str) else tc["function"]["arguments"],
-            }
-            for tc in raw_tool_calls
-        ]
-    return result
-
-
-def _chat_anthropic(
-    messages: list[dict[str, object]],
-    tools: list[dict[str, object]],
-    model: str | None,
-    temperature: float,
-    max_tokens: int,
-) -> dict[str, object]:
-    """Anthropic API call with tool use."""
-    base_url = env("ANTHROPIC_BASE_URL").rstrip("/")
-    api_key = env("ANTHROPIC_API_KEY")
-    resolved_model = model or env("ANTHROPIC_MODEL", "claude-sonnet-4-20250514")
-
-    # Extract system message
-    system_text = ""
-    user_messages = []
-    for msg in messages:
-        if msg.get("role") == "system":
-            system_text = str(msg.get("content", ""))
-        else:
-            user_messages.append(msg)
-
-    # Convert tool results to Anthropic format
-    anthropic_messages: list[dict[str, object]] = []
-    for msg in user_messages:
-        role = msg.get("role", "user")
-        if role == "tool":
-            # Tool results are appended as user messages with tool_result blocks
-            if anthropic_messages and anthropic_messages[-1].get("role") == "user":
-                anthropic_messages[-1]["content"] = anthropic_messages[-1].get("content", [])  # type: ignore
-                if isinstance(anthropic_messages[-1]["content"], str):
-                    anthropic_messages[-1]["content"] = [{"type": "text", "text": anthropic_messages[-1]["content"]}]  # type: ignore
-                anthropic_messages[-1]["content"].append({  # type: ignore
-                    "type": "tool_result",
-                    "tool_use_id": msg.get("tool_call_id", ""),
-                    "content": str(msg.get("content", "")),
-                })
-            continue
-        content = str(msg.get("content", ""))
-        if isinstance(msg.get("content"), list):
-            content = msg["content"]  # type: ignore
-        # Handle assistant messages with tool_calls
-        if role == "assistant" and msg.get("tool_calls"):
-            content_blocks: list[dict[str, object]] = []
-            if msg.get("content"):
-                content_blocks.append({"type": "text", "text": str(msg["content"])})
-            for tc in msg["tool_calls"]:  # type: ignore
-                content_blocks.append({
-                    "type": "tool_use",
-                    "id": tc["id"],  # type: ignore
-                    "name": tc["function"]["name"],  # type: ignore
-                    "input": json.loads(tc["function"]["arguments"]) if isinstance(tc["function"]["arguments"], str) else tc["function"]["arguments"],  # type: ignore
-                })
-            anthropic_messages.append({"role": "assistant", "content": content_blocks})
-        else:
-            anthropic_messages.append({"role": role, "content": content})
-
-    # Convert tools to Anthropic format
-    anthropic_tools = []
-    for tool in tools:
-        func = tool.get("function", {})
-        anthropic_tools.append({
-            "name": func.get("name", ""),
-            "description": func.get("description", ""),
-            "input_schema": func.get("parameters", {}),
-        })
-
-    payload: dict[str, object] = {
-        "model": resolved_model,
-        "max_tokens": max_tokens,
-        "temperature": temperature,
-        "messages": anthropic_messages,
-    }
-    if system_text:
-        payload["system"] = system_text
-    if anthropic_tools:
-        payload["tools"] = anthropic_tools
-
-    req = urllib.request.Request(
-        f"{base_url}/v1/messages",
-        data=json.dumps(payload).encode("utf-8"),
-        headers={
-            "x-api-key": api_key,
-            "anthropic-version": "2023-06-01",
-            "Content-Type": "application/json",
-        },
-        method="POST",
-    )
-    with urllib.request.urlopen(req, timeout=_llm_timeout(), context=ssl_context()) as response:
-        data = json.loads(response.read().decode("utf-8"))
-
-    content_blocks = data.get("content", [])
-    stop_reason = data.get("stop_reason", "end_turn")
-
-    # Extract text and tool_use from response
-    text_content = ""
-    tool_calls = []
-    for block in content_blocks:
-        if block.get("type") == "text":
-            text_content += block.get("text", "")
-        elif block.get("type") == "tool_use":
-            tool_calls.append({
-                "id": block["id"],
-                "name": block["name"],
-                "arguments": block["input"],
-            })
-
-    return {
-        "content": text_content or None,
-        "tool_calls": tool_calls,
-        "finish_reason": stop_reason,
-    }
 
 
 def agentic_loop(

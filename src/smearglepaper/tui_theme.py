@@ -25,6 +25,12 @@ Screen {
     color: #f5f5f7;
 }
 
+#resume-turn, #memory-review {
+    display: none;
+    height: 3;
+    margin: 0 2;
+}
+
 ModalScreen {
     align: center middle;
     background: #000000 65%;

@@ -1,0 +1,12 @@
+include README.md LICENSE CONTRIBUTING.md SECURITY.md CHANGELOG.md
+recursive-include skills *.md *.yaml *.py
+recursive-include packs *.yaml
+include scripts/check_release.py scripts/evaluate_harness.py
+recursive-include scripts/eval_support *.py
+include docs/RELEASING.md docs/HARNESS_EVALUATION.md
+prune data
+prune workspace
+prune memory
+prune .aigc
+prune artifacts
+global-exclude .env *.pyc .DS_Store

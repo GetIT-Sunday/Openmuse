@@ -1,5 +1,14 @@
 # Changelog
 
+## Unreleased
+
+- Unified conversation events/projection, Provider streaming, cancellation and controller routing.
+- Added bounded context, durable turn recovery, and consent-gated preference memory.
+- Added fail-closed offline Harness acceptance and release distribution checks.
+- Bundle portable Skills/Pack in wheel and sdist; keep installed state out of site-packages.
+- Added `openmuse --version`, `OPENMUSE_HOME`, security policy and release checklist.
+- OpenMuse remains Alpha; passing offline gates does not certify online model quality or publishing availability.
+
 ## 0.2.0
 
 - Bound LLM waits and fall back to a local evidence draft instead of losing a paper-reading run on provider timeout.

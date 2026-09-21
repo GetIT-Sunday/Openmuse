@@ -155,6 +155,8 @@ def _failure_message(manifest: dict[str, Any], steps: list[dict[str, Any]]) -> s
 
 
 def _headline(workflow: str, status: str, error: str) -> str:
+    if status == "recovery_required":
+        return "外部写入结果待核对，已阻止自动重试"
     if status in {"failed", "cancelled"}:
         return "任务未完成：" + friendly_error(error)
     if status == "waiting_input":
@@ -191,6 +193,8 @@ def friendly_error(error: str) -> str:
 
 
 def _next_action(workflow: str, status: str) -> str:
+    if status == "recovery_required":
+        return "请先在远端核对结果，再使用 runs reconcile 记录人工确认；不会自动重复写入。"
     if status == "waiting_input":
         return "选择一篇候选论文"
     if status in {"pending", "running", "waiting_approval", "cancelling"}:
@@ -217,6 +221,8 @@ def _phase(steps: list[dict[str, Any]], status: str) -> str:
         (str(step.get("id", "")) for step in steps if step.get("status") in {"running", "retrying", "waiting_approval", "waiting_input"}),
         "",
     )
+    if not active:
+        active = next((str(step.get("id", "")) for step in steps if step.get("status") == "failed"), "")
     if not active and status == "completed":
         return "文章已完成"
     if active in {"collect", "rank", "choose", "select"}:

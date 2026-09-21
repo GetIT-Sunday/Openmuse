@@ -25,13 +25,13 @@ TOOL_SKILLS: dict[str, str] = {
 
 def installed_capabilities(project_root: "Path | None" = None) -> tuple[list[dict[str, Any]], str]:
     """Return tools backed by installed Skills and a concise model catalog."""
-    from pathlib import Path
+    from .config import RESOURCE_ROOT, ROOT_DIR
     from .pack_manager import InstalledPackStore
     from .skill_registry import SkillRegistry
 
-    root = project_root or Path(__file__).resolve().parents[2]
+    root = project_root or ROOT_DIR
     pack_store = InstalledPackStore(root / ".aigc")
-    registry = SkillRegistry((root / "skills", *pack_store.skill_roots()))
+    registry = SkillRegistry(((project_root or RESOURCE_ROOT) / "skills", *pack_store.skill_roots()))
     valid_ids = {package.manifest.id for package in registry.list() if not package.validate()}
     tools = [tool for tool in TOOLS if TOOL_SKILLS.get(str(tool.get("function", {}).get("name", ""))) in valid_ids]
     summaries = [package.capability_summary() for package in registry.list() if package.manifest.id in valid_ids]
@@ -292,7 +292,11 @@ def _get_workflow() -> SmearglePaperWorkflow:
 
 def execute_tool(name: str, arguments: dict[str, Any]) -> str:
     """Execute a tool call and return JSON result string."""
-    import traceback
+    from .cancellation import Cancelled, current_token
+
+    token = current_token()
+    if token:
+        token.check()
 
     workflow = _get_workflow()
     try:
@@ -455,6 +459,8 @@ def execute_tool(name: str, arguments: dict[str, Any]) -> str:
         else:
             return json.dumps({"error": f"Unknown tool: {name}"}, ensure_ascii=False)
 
+    except Cancelled:
+        raise
     except Exception as exc:
         return json.dumps({"error": f"{type(exc).__name__}: {exc}"}, ensure_ascii=False)
 
